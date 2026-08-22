@@ -1,4 +1,4 @@
-"""awewarm-hub — the multi-tenant hub server for awewarm (proprietary).
+"""awewarm-hub — the multi-tenant hub server for awewarm.
 
 Depends on the open-source awewarm package for the warm-up engine
 (WarmServer, schedule, transport) and the HTTP handler core; this package

@@ -1,6 +1,6 @@
 # awewarm-hub
 
-Multi-tenant hub server for [awewarm](https://pypi.org/project/awewarm/): one always-on box keeps many users' AI coding-plan subscription windows warm, each user's secrets staying on their own machine. This package is **closed-source** (see [LICENSE](LICENSE)); it depends on the open-source `awewarm` engine and is pinned to its minor version.
+Multi-tenant hub server for [awewarm](https://github.com/wehuman01/awewarm): one always-on box keeps many users' AI coding-plan subscription windows warm, each user's secrets staying on their own machine. Open-source under [MPL-2.0](LICENSE) — the same license as awewarm — and published beside it under [wehuman01](https://github.com/wehuman01); this package depends on the `awewarm` engine as a pip package, pinned to its minor version.
 
 - **Operator** (this machine, the 24/7 box): `awewarm-hub serve` + the admin commands below.
 - **Users** (their own machines, open-source awewarm only): `awewarm remote connect <url> --invite awi_...`, then `awewarm config set <id> --remote`. They never need this package.
@@ -48,4 +48,4 @@ pip install -e ../awewarm -e . pytest   # the open-source engine, editable, plus
 python -m pytest
 ```
 
-The source repository is private; releases are built and published to PyPI via Trusted Publishing on tag push.
+The source repository is [wehuman01/awewarm-hub](https://github.com/wehuman01/awewarm-hub) (open, MPL-2.0); releases are built and published to PyPI via Trusted Publishing on tag push.
