@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Multi-tenant hub server for awewarm: one box, many invited users."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["awewarm>=0.6,<0.7", "click>=8.1"]
+dependencies = ["awewarm>=0.5.5,<0.6", "click>=8.1"]
 authors = [
   { name = "Peng" }
 ]
@@ -26,6 +26,8 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/wehuman01/awewarm-hub"
 Repository = "https://github.com/wehuman01/awewarm-hub"
+Changelog = "https://github.com/wehuman01/awewarm-hub/blob/main/docs/CHANGELOG.md"
+Engine = "https://github.com/wehuman01/awewarm"
 
 [project.scripts]
 awewarm-hub = "awewarm_hub.cli:main"
