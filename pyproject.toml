@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "awewarm-hub"
+dynamic = ["version"]
+description = "Multi-tenant hub server for awewarm: one box, many invited users."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["awewarm>=0.6,<0.7", "click>=8.1"]
+authors = [
+  { name = "Peng" }
+]
+license = "LicenseRef-Proprietary"
+keywords = ["ai", "agent", "scheduler", "keep-alive", "hub"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Utilities"
+]
+
+[project.scripts]
+awewarm-hub = "awewarm_hub.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "awewarm_hub.__version__"}
