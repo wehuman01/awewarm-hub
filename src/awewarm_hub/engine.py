@@ -215,7 +215,7 @@ class Hub:
     def _refresh(self):
         """Adopt tenants.json changes made by other processes since our last look.
 
-        `awewarm-hub invite` and `awewarm-hub revoke` are one-shot CLI processes
+        `awewarm-hub invite` and `awewarm-hub invite revoke` are one-shot CLI processes
         writing the same file; without this a long-lived serve would 403 every
         join with an invite minted after it started and keep honoring revoked
         tokens. Disk wins for persisted tenant records because every mutation
@@ -455,7 +455,7 @@ class Hub:
             if entry is None:
                 raise ApiError(404, f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
             if entry.get("revokedAt"):
-                raise ApiError(403, f"invite already revoked — restore it instead: awewarm-hub restore {code}")
+                raise ApiError(403, f"invite already revoked — restore it instead: awewarm-hub invite restore {code}")
             expires = schedule.parse_ts(entry.get("expiresAt"))
             now = datetime.now().astimezone()
             entry["revokedAt"] = schedule.iso(now)
@@ -534,7 +534,7 @@ class Hub:
     def auth(self, bearer, machine=None):
         """Bearer token → tenant, behind the machine cap and rate-limit gate."""
         with self.lock:
-            self._refresh()  # revocations happen in other processes (awewarm-hub revoke)
+            self._refresh()  # revocations happen in other processes (awewarm-hub invite revoke)
             digest = _hash_secret(bearer)
             tenant = next(
                 (t for t in self.tenants.values() if hmac.compare_digest(t.token_hash, digest)),
@@ -549,7 +549,7 @@ class Hub:
             if invite and invite.get("revokedAt"):
                 raise ApiError(
                     401,
-                    "hub token suspended by the operator — ask them to restore your invite (awewarm-hub restore <code>)",
+                    "hub token suspended by the operator — ask them to restore your invite (awewarm-hub invite restore <code>)",
                 )
             if not machine:
                 raise ApiError(

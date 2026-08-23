@@ -240,7 +240,7 @@ def status_command(data_dir, show_details):
     else:
         click.echo(f"  tenants: {active} active (caps unknown — set with: awewarm-hub config --max-tenants)")
     if suspended:
-        click.echo(f"             {suspended} suspended (slot free; restore their invite: awewarm-hub restore <awi_...>)")
+        click.echo(f"             {suspended} suspended (slot free; restore their invite: awewarm-hub invite restore <awi_...>)")
     conn_cap = record.get("maxConnsPerTenant")
     click.echo(
         f"  connections: {total_conns} delegated"
@@ -319,14 +319,31 @@ def _parse_duration(raw):
     return timedelta(seconds=seconds)
 
 
-@cli.command("invite")
-@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
+@cli.group("invite", cls=WrapGroup, invoke_without_command=True)
+@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved); subcommands without their own --data-dir inherit it.")
 @click.option("--name", default=None, help="Who these invites are for (shown in list users).")
 @click.option("--count", type=int, default=1, show_default=True, help="How many codes to mint at once (they share name, expiry, and machine cap).")
 @click.option("--expires-in", "expires_in", default="48h", show_default=True, help="How long each code stays usable: <N><s|m|h|d>, e.g. 90s, 30m, 12h, 7d.")
-@click.option("--machines", "machines", type=int, default=None, help="Machines each invite's token may serve from (default: the serve --max-machines value).")
-def invite_command(data_dir, name, count, expires_in, machines):
-    """Mint one-time pairing invites (recover later with: list invites --reveal)."""
+@click.option("--machines", "machines", type=int, default=None, help="Machines each invite's token may serve from (default: the max-machines cap).")
+@click.pass_context
+def invite_group(ctx, data_dir, name, count, expires_in, machines):
+    """Mint one-time pairing invites (recover later with: list invites --reveal).
+
+    Bare `awewarm-hub invite [flags]` mints; the subcommands operate on
+    codes already minted.
+
+    \b
+      awewarm-hub invite --name alice               # mint (bare form)
+      awewarm-hub invite rename awi_... <name>      # relabel one
+      awewarm-hub invite revoke awi_... [--delete]  # kill one
+      awewarm-hub invite restore awi_...            # undo a revoke
+    """
+    ctx.obj = data_dir
+    if ctx.invoked_subcommand is None:
+        _invite_mint(data_dir, name, count, expires_in, machines)
+
+
+def _invite_mint(data_dir, name, count, expires_in, machines):
     if not 1 <= count <= 100:
         die(f"--count must be an integer between 1 and 100, got '{count}'")
     if machines is not None and machines <= 0:
@@ -498,17 +515,11 @@ def _require_code_target(target):
         )
 
 
-@cli.command("revoke")
-@click.argument("code")
-@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-@click.option("--delete", "hard_delete", is_flag=True,
-              help="Remove the invite from the ledger outright — no revoked row stays. A used one takes its tenant with it (token dead, capacity freed, workspace kept on disk). Irreversible.")
-def revoke_command(code, data_dir, hard_delete):
-    """Kill an invite (awi_...): a pending code stops pairing, a used one
-    suspends its tenant. Reversible.
+def _moved(old, new):
+    click.echo(f"note: `awewarm-hub {old}` moved to `awewarm-hub {new}` (legacy alias, removed in v1.0)", err=True)
 
-    --delete wipes the ledger row instead — no revoked tombstone; a used
-    one takes its tenant with it. Irreversible."""
+
+def _revoke_impl(code, data_dir, hard_delete):
     _require_code_target(code)
     engine = Hub(_resolve_server_data_dir(data_dir))
     known = {row["code"]: row for row in engine.list_invites() if row["code"]}
@@ -559,14 +570,10 @@ def revoke_command(code, data_dir, hard_delete):
         click.echo(f"✓ invite revoked{note} (it had already expired — the ledger row is kept)")
     else:
         click.echo(f"✓ invite revoked{note} — the code no longer pairs; a fresh one: awewarm-hub invite")
-    click.echo(f"  undo: awewarm-hub restore {code}")
+    click.echo(f"  undo: awewarm-hub invite restore {code}")
 
 
-@cli.command("restore")
-@click.argument("code")
-@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-def restore_command(code, data_dir):
-    """Undo a revoke: a pending invite (awi_...) pairs again, a used one brings its tenant back."""
+def _restore_impl(code, data_dir):
     _require_code_target(code)
     engine = Hub(_resolve_server_data_dir(data_dir))
     try:
@@ -580,11 +587,36 @@ def restore_command(code, data_dir):
         die(f"could not restore {code}:\n{exc}")
 
 
-@cli.command("rename")
+@invite_group.command("revoke")
+@click.argument("code")
+@click.option("--data-dir", default=None, help="The hub's data directory (defaults to the invite group's --data-dir, then ~/.awewarm-server or the one `config --data-dir` saved).")
+@click.option("--delete", "hard_delete", is_flag=True,
+              help="Remove the invite from the ledger outright — no revoked row stays. A used one takes its tenant with it (token dead, capacity freed, workspace kept on disk). Irreversible.")
+@click.pass_context
+def invite_revoke_command(ctx, code, data_dir, hard_delete):
+    """Kill an invite (awi_...): a pending code stops pairing, a used one
+    suspends its tenant. Reversible.
+
+    --delete wipes the ledger row instead — no revoked tombstone; a used
+    one takes its tenant with it. Irreversible."""
+    _revoke_impl(code, data_dir or ctx.obj, hard_delete)
+
+
+@invite_group.command("restore")
+@click.argument("code")
+@click.option("--data-dir", default=None, help="The hub's data directory (defaults to the invite group's --data-dir, then ~/.awewarm-server or the one `config --data-dir` saved).")
+@click.pass_context
+def invite_restore_command(ctx, code, data_dir):
+    """Undo a revoke: a pending invite (awi_...) pairs again, a used one brings its tenant back."""
+    _restore_impl(code, data_dir or ctx.obj)
+
+
+@invite_group.command("rename")
 @click.argument("code")
 @click.argument("name")
-@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-def rename_command(code, name, data_dir):
+@click.option("--data-dir", default=None, help="The hub's data directory (defaults to the invite group's --data-dir, then ~/.awewarm-server or the one `config --data-dir` saved).")
+@click.pass_context
+def invite_rename_command(ctx, code, name, data_dir):
     """Rename an invite's note (awi_...); a used one's tenant follows.
 
     The note is the label `list invites` and `list users` show — who the
@@ -592,7 +624,7 @@ def rename_command(code, name, data_dir):
     _require_code_target(code)
     if not name.strip() or "\n" in name:
         die("the name must be a single non-empty line")
-    engine = Hub(_resolve_server_data_dir(data_dir))
+    engine = Hub(_resolve_server_data_dir(data_dir or ctx.obj))
     try:
         result = engine.rename_invite(code, name.strip())
     except ApiError as exc:  # registry busy or unknown
@@ -601,6 +633,29 @@ def rename_command(code, name, data_dir):
         click.echo(f"✓ invite renamed to {result['note']} — tenant {result['tenant']} follows")
     else:
         click.echo(f"✓ invite renamed to {result['note']}")
+
+
+# --- Hidden legacy aliases (pre-0.5.7 top-level spellings; removed in v1.0) ---
+
+
+@cli.command("revoke", hidden=True)
+@click.argument("code")
+@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
+@click.option("--delete", "hard_delete", is_flag=True,
+              help="Remove the invite from the ledger outright — no revoked row stays. A used one takes its tenant with it (token dead, capacity freed, workspace kept on disk). Irreversible.")
+def legacy_revoke_command(code, data_dir, hard_delete):
+    """Legacy spelling: invite revoke (removed in v1.0)."""
+    _moved("revoke", "invite revoke")
+    _revoke_impl(code, data_dir, hard_delete)
+
+
+@cli.command("restore", hidden=True)
+@click.argument("code")
+@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
+def legacy_restore_command(code, data_dir):
+    """Legacy spelling: invite restore (removed in v1.0)."""
+    _moved("restore", "invite restore")
+    _restore_impl(code, data_dir)
 
 
 @cli.command("self-update")

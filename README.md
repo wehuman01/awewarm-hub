@@ -91,13 +91,13 @@ WantedBy=default.target
 awewarm-hub serve [--data-dir/--bind/--port]   # the resident hub server
                  [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]
 awewarm-hub status [--details]                 # capacity, invite counts, tenants, serve liveness
-awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]
+awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]  # mint (bare form)
 awewarm-hub list users [--api|--reveal|--json] # tenants: health, usage, machines, joining code
 awewarm-hub list invites [--reveal|--token|--json]  # every minted code: pending/used/revoked/expired, its machine cap, its tenant's token (--token)
-awewarm-hub revoke <awi_...>                   # kill an invite: pending stops pairing, used suspends its tenant (reversible)
-awewarm-hub revoke <awi_...> --delete          # wipe the ledger row outright; a used one takes its tenant (irreversible)
-awewarm-hub restore <awi_...>                  # undo a revoke
-awewarm-hub rename <awi_...> <name>            # relabel an invite's note; a used one's tenant follows
+awewarm-hub invite rename <awi_...> <name>     # relabel an invite's note; a used one's tenant follows
+awewarm-hub invite revoke <awi_...>            # kill an invite: pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub invite revoke <awi_...> --delete   # wipe the ledger row outright; a used one takes its tenant (irreversible)
+awewarm-hub invite restore <awi_...>           # undo a revoke
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # capacity caps; a running serve adopts them without a restart

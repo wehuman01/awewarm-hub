@@ -788,7 +788,7 @@ class HubCliTests(IsolatedTestCase):
     def test_revoke_by_tenant_id_is_refused_with_guidance(self):
         engine_hub = engine.Hub(self.data_dir)
         joined = engine_hub.join(engine_hub.mint_invite("alice"))
-        result = invoke(["revoke", joined["tenantId"]] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", joined["tenantId"]] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no longer addressable", result.output)
         self.assertIn("hub list invites --reveal", result.output)
@@ -799,11 +799,11 @@ class HubCliTests(IsolatedTestCase):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
         joined = engine_hub.join(code)
-        result = invoke(["revoke", code] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", code] + self.dir_opt, input="y\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn("suspended", result.output)
         self.assertIn(joined["tenantId"], result.output)
-        self.assertIn("awewarm-hub restore", result.output)
+        self.assertIn("awewarm-hub invite restore", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
         record = registry["tenants"][joined["tenantId"]]
         self.assertNotIn("suspendedAt", record)  # nothing deleted, nothing mirrored
@@ -814,7 +814,7 @@ class HubCliTests(IsolatedTestCase):
         code = engine_hub.mint_invite("alice")
         busy = ApiError(503, "hub registry is busy — retry this request")
         with mock.patch.object(engine.Hub, "revoke", side_effect=busy):
-            result = invoke(["revoke", code] + self.dir_opt, input="y\n")
+            result = invoke(["invite", "revoke", code] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("could not revoke the invite", result.output)
         self.assertIn("hub registry is busy", result.output)
@@ -823,7 +823,7 @@ class HubCliTests(IsolatedTestCase):
     def test_revoke_kills_a_pending_invite(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        result = invoke(["revoke", code] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", code] + self.dir_opt, input="y\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn("invite revoked for alice", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
@@ -834,7 +834,7 @@ class HubCliTests(IsolatedTestCase):
     def test_revoke_aborts_without_confirmation(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        result = invoke(["revoke", code] + self.dir_opt, input="n\n")
+        result = invoke(["invite", "revoke", code] + self.dir_opt, input="n\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn("aborted", result.output)
         self.assertTrue(engine_hub.join(code)["token"].startswith("awt_"))
@@ -842,7 +842,7 @@ class HubCliTests(IsolatedTestCase):
     def test_delete_wipes_a_pending_invite_row(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", code, "--delete"] + self.dir_opt, input="y\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn("invite deleted for alice", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
@@ -854,7 +854,7 @@ class HubCliTests(IsolatedTestCase):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
         joined = engine_hub.join(code)
-        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", code, "--delete"] + self.dir_opt, input="y\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn(joined["tenantId"], result.output)
         self.assertIn("workspace stays on disk", result.output)
@@ -867,7 +867,7 @@ class HubCliTests(IsolatedTestCase):
         code = engine_hub.mint_invite("alice")
         joined = engine_hub.join(code)
         engine_hub.revoke(code)
-        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", code, "--delete"] + self.dir_opt, input="y\n")
         self.assertEqual(result.exit_code, 0)  # unlike plain revoke, a revoked row is deletable
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
         self.assertNotIn(engine._hash_secret(code), registry["invites"])
@@ -876,7 +876,7 @@ class HubCliTests(IsolatedTestCase):
     def test_delete_aborts_without_confirmation(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="n\n")
+        result = invoke(["invite", "revoke", code, "--delete"] + self.dir_opt, input="n\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn("aborted", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
@@ -885,7 +885,7 @@ class HubCliTests(IsolatedTestCase):
     def test_rename_relabels_a_pending_invite(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        result = invoke(["rename", code, "team-a"] + self.dir_opt)
+        result = invoke(["invite", "rename", code, "team-a"] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn("invite renamed to team-a", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
@@ -897,7 +897,7 @@ class HubCliTests(IsolatedTestCase):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
         joined = engine_hub.join(code)
-        result = invoke(["rename", code, "bob"] + self.dir_opt)
+        result = invoke(["invite", "rename", code, "bob"] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn(joined["tenantId"], result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
@@ -909,18 +909,41 @@ class HubCliTests(IsolatedTestCase):
     def test_rename_rejects_unknown_codes_and_bad_names(self):
         engine_hub = engine.Hub(self.data_dir)
         engine_hub.mint_invite("alice")
-        result = invoke(["rename", "awi_" + "x" * 20, "bob"] + self.dir_opt)
+        result = invoke(["invite", "rename", "awi_" + "x" * 20, "bob"] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no such invite", result.output)
         code = engine_hub.list_invites()[0]["code"]
-        result = invoke(["rename", code, " "] + self.dir_opt)
+        result = invoke(["invite", "rename", code, " "] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("single non-empty line", result.output)
+
+    def test_invite_group_inherits_the_data_dir(self):
+        # `invite --data-dir X revoke ...` — the group's dir reaches subcommands
+        # that don't carry their own --data-dir
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        result = invoke(["invite", "--data-dir", self.data_dir, "revoke", code], input="y\n")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("invite revoked", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertTrue(registry["invites"][engine._hash_secret(code)].get("revokedAt"))
+
+    def test_legacy_top_level_revoke_and_restore_still_work(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        joined = engine_hub.join(code)
+        result = invoke(["revoke", code] + self.dir_opt, input="y\n")  # pre-0.5.7 spelling
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("moved to `awewarm-hub invite revoke`", result.output)
+        result = invoke(["restore", code] + self.dir_opt)  # pre-0.5.7 spelling
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("moved to `awewarm-hub invite restore`", result.output)
+        self.assertIn(joined["tenantId"], result.output)
 
     def test_restore_by_tenant_id_is_refused_with_guidance(self):
         engine_hub = engine.Hub(self.data_dir)
         joined = engine_hub.join(engine_hub.mint_invite("alice"))
-        result = invoke(["restore", joined["tenantId"]] + self.dir_opt)
+        result = invoke(["invite", "restore", joined["tenantId"]] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no longer addressable", result.output)
         self.assertIn("hub list invites --reveal", result.output)
@@ -930,7 +953,7 @@ class HubCliTests(IsolatedTestCase):
         code = engine_hub.mint_invite("alice")
         joined = engine_hub.join(code)
         engine_hub.revoke(code)
-        result = invoke(["restore", code] + self.dir_opt)
+        result = invoke(["invite", "restore", code] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn("restored", result.output)
         self.assertIn(joined["tenantId"], result.output)
@@ -939,7 +962,7 @@ class HubCliTests(IsolatedTestCase):
     def test_restore_of_an_unrevoked_invite_is_refused(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        result = invoke(["restore", code] + self.dir_opt)
+        result = invoke(["invite", "restore", code] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("not revoked", result.output)
 
@@ -947,7 +970,7 @@ class HubCliTests(IsolatedTestCase):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
         engine_hub.revoke(code)
-        result = invoke(["restore", code] + self.dir_opt)
+        result = invoke(["invite", "restore", code] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn("pairs again", result.output)
         self.assertTrue(engine_hub.join(code)["token"].startswith("awt_"))
@@ -979,7 +1002,7 @@ class HubCliTests(IsolatedTestCase):
         self.assertIn("revoked", result.output)
 
     def test_revoke_reports_an_unknown_code(self):
-        result = invoke(["revoke", "awi_" + "x" * 20] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", "awi_" + "x" * 20] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no such invite", result.output)
         self.assertIn("hub list invites", result.output)
@@ -1084,7 +1107,7 @@ class HubCliTests(IsolatedTestCase):
         self.assertIn("minted before codes were kept", result.output)
 
     def test_revoke_unknown_tenant_lists_known_ones(self):
-        result = invoke(["revoke", "t_nope"] + self.dir_opt, input="y\n")
+        result = invoke(["invite", "revoke", "t_nope"] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no longer addressable", result.output)
 
