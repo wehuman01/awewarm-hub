@@ -424,6 +424,32 @@ class Hub:
         return {"ok": True, "status": "used" if used_by else ("expired" if was_expired else "pending"),
                 "tenant": used_by, "note": entry.get("note")}
 
+    def delete_invite(self, code):
+        """Remove an invite row outright (`revoke --delete`) — no tombstone.
+
+        A pending code simply never pairs again. A used one takes its tenant
+        with it: authorization lives on the invite row alone, so leaving the
+        tenant behind would resurrect it (auth would see no revokedAt and
+        fall back to the global machine cap). The tenant's workspace stays
+        on disk — the same rule as the v1→v2 migration. Unlike revoke this
+        is not reversible: the row is gone, so `restore` has nothing to act
+        on. Works on a revoked row too — that is the purge-a-tombstone case.
+        """
+        with self._registry_transaction():
+            digest = _hash_secret(code)
+            entry = self.registry["invites"].get(digest)
+            if entry is None:
+                raise ApiError(404, f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
+            used_by = entry.get("usedBy")
+            del self.registry["invites"][digest]
+            if used_by:
+                self.registry["tenants"].pop(used_by, None)
+                self.tenants.pop(used_by, None)
+            self._save()
+        who = f" — {used_by} removed" if used_by else ""
+        self.log(f"invite deleted ({entry.get('note') or 'no note'}){who}")
+        return {"ok": True, "tenant": used_by, "note": entry.get("note")}
+
     def restore(self, code):
         """Reverse `revoke`: a pending code pairs again; a used one brings
         its tenant back, capacity permitting."""

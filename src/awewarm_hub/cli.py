@@ -32,7 +32,33 @@ def _version_callback(ctx, _param, value):
     ctx.exit()
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+class WrapGroup(click.Group):
+    """Group whose `Commands:` listing wraps long one-liners.
+
+    Same behavior as awewarm's `clickext.WrapGroup`, inlined here on
+    purpose: a help-rendering nicety must not move the engine pin.
+    Click truncates each description to the terminal width with `...`;
+    the full first help paragraph wraps just as well.
+    """
+
+    def format_commands(self, ctx, formatter):
+        rows = []
+        for name in self.list_commands(ctx):
+            cmd = self.get_command(ctx, name)
+            if cmd is None or cmd.hidden:
+                continue
+            rows.append((name, cmd.short_help or _first_paragraph(cmd)))
+        if rows:
+            with formatter.section("Commands"):
+                formatter.write_dl(rows)
+
+
+def _first_paragraph(cmd):
+    """A command's first help paragraph collapsed to one line."""
+    return " ".join((cmd.help or "").partition("\n\n")[0].split())
+
+
+@click.group(cls=WrapGroup, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("-v", "--version", is_flag=True, expose_value=False, is_eager=True,
               callback=_version_callback, help="Show the version and exit.")
 def cli():
@@ -277,7 +303,7 @@ def invite_command(data_dir, name, count, expires_in, machines):
         click.echo("  Lost one? List every minted code with: awewarm-hub list invites --reveal")
 
 
-@cli.group("list")
+@cli.group("list", cls=WrapGroup)
 def list_group():
     """Read hub state: users (paired tenants) or invites (minted codes)."""
 
@@ -426,8 +452,14 @@ def _require_code_target(target):
 @cli.command("revoke")
 @click.argument("code")
 @click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-def revoke_command(code, data_dir):
-    """Kill an invite (awi_...): a pending code stops pairing, a used one suspends its tenant. Reversible."""
+@click.option("--delete", "hard_delete", is_flag=True,
+              help="Remove the invite from the ledger outright — no revoked row stays. A used one takes its tenant with it (token dead, capacity freed, workspace kept on disk). Irreversible.")
+def revoke_command(code, data_dir, hard_delete):
+    """Kill an invite (awi_...): a pending code stops pairing, a used one
+    suspends its tenant. Reversible.
+
+    --delete wipes the ledger row instead — no revoked tombstone; a used
+    one takes its tenant with it. Irreversible."""
     _require_code_target(code)
     engine = Hub(_resolve_server_data_dir(data_dir))
     known = {row["code"]: row for row in engine.list_invites() if row["code"]}
@@ -435,6 +467,31 @@ def revoke_command(code, data_dir):
     if row is None:
         die(f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
     note = f" for {row['note']}" if row["note"] else ""
+    if hard_delete:
+        if row["usedBy"]:
+            prompt = (
+                f"Delete invite{note} and its tenant {row['usedBy']} from the ledger?\n"
+                "The token stops authenticating, the capacity slot frees, and no\n"
+                "revoked row remains — the workspace stays on disk. Irreversible."
+            )
+        else:
+            prompt = (
+                f"Delete invite{note} from the ledger? The code never pairs, and no\n"
+                "revoked row remains. Irreversible."
+            )
+        if not click.confirm(prompt, default=False):
+            click.echo("aborted — nothing deleted")
+            return
+        try:
+            result = engine.delete_invite(code)
+        except ApiError as exc:  # registry busy or unknown
+            die(f"could not delete the invite:\n{exc}")
+        if result.get("tenant"):
+            click.echo(f"✓ invite deleted{note} — tenant {result['tenant']} removed (its workspace stays on disk)")
+        else:
+            click.echo(f"✓ invite deleted{note} — no revoked row remains")
+        click.echo("  a fresh invite: awewarm-hub invite")
+        return
     if row["usedBy"]:
         prompt = f"Revoke invite{note}? Tenant {row['usedBy']} stops working immediately."
     else:

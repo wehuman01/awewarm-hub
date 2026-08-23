@@ -8,6 +8,10 @@ This changes a stable design constraint, eyes open: tenant tokens now join invit
 
 **Breaking:** `invite` learns batch minting and adopts aweshare's flag spellings: `--name` (was `--note`), `--count N` (1–100 codes in one registry transaction, sharing name, expiry, and machine cap), and `--expires-in 90s|30m|12h|7d` (was `--expires-hours`; same 48 h default, now also accepting sub-hour spellings). The old flags are gone — spellings match `aweshare hub invite create` across the two products.
 
+`--help` command listings now wrap long one-liners instead of truncating them with `...` (a local `WrapGroup`, same behavior as awewarm's), so a narrow terminal still reads every description in full. It is inlined rather than imported from awewarm on purpose — a help-rendering nicety must not move the `awewarm` engine pin.
+
+`revoke --delete` wipes an invite row from the ledger outright: no revoked tombstone stays, a used one takes its tenant with it (token dead, capacity slot freed, workspace kept on disk), and `restore` cannot bring any of it back. Plain `revoke` still keeps every row; `--delete` also accepts an already-revoked row — the purge-a-tombstone case. Taking the tenant along is not optional: authorization lives on the invite row alone, so a tenant whose invite row vanished would come back unsuspended with the global machine cap.
+
 ## v0.5.6
 
 **Breaking:** revoke/restore converge to the invite code as their single entry point, and the code becomes the only ledger of authorization. `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed) — `revoke t_...` / `restore t_...` are gone and now error with a pointer to `list invites --reveal` (the USED BY column names the tenant). The code is the lifetime name of an authorization: once used, its `usedBy → tenant` link is permanent, so tenant-addressing was always a second address for the same state transition — with a second code path, which had already drifted (the `t_` path wiped machine pairings, the `awi_` path didn't).

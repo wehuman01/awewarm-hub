@@ -199,6 +199,7 @@ Operator actions (run on user request):
 ```bash
 awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]   # mint one-time code(s)
 awewarm-hub revoke <awi_...>                    # kill an invite: pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub revoke <awi_...> --delete           # wipe the ledger row outright; a used one takes its tenant (irreversible)
 awewarm-hub restore <awi_...>                   # undo a revoke
 awewarm-hub config --data-dir /data [--unset]   # persist the default data dir
 awewarm-hub self-update                         # upgrade awewarm-hub
@@ -214,7 +215,7 @@ awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tena
 
 - Never run `serve` from the agent, and never background it — it is a resident process the operator owns.
 - Invite codes are one-time secrets; tenant tokens are live credentials. Never log either beyond what the command prints for handoff, and remind the user to send them over a private channel.
-- Revoke before you delete nothing: revocation is suspension, not deletion, and `restore` undoes it. Both address invite codes (`awi_...`) — a tenant's code is the USED BY match in `list invites --reveal`. Prefer `revoke` for anything reversible.
+- Revocation is suspension, not deletion, and `restore` undoes it — prefer `revoke` for anything reversible. Both it and the destructive variant address invite codes (`awi_...`); a tenant's code is the USED BY match in `list invites --reveal`. `revoke --delete` wipes the ledger row instead, and a used code's tenant goes with it (token dead, slot freed, workspace kept on disk) with no way back — run it only when the user explicitly asks to delete outright.
 - Users' API keys pass through the hub's RAM. State the trust rule plainly before the user invites strangers.
 - Restarting `serve` is safe (keys re-push automatically); still, coordinate it with the user instead of surprising them.
 - If any command fails, report the exact command and error message. Do not silently retry.

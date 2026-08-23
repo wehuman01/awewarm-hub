@@ -18,7 +18,7 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 | Category | Commands |
 |---|---|
 | Read-only — run freely | `awewarm-hub status [--details]`, `awewarm-hub list users [--api\|--reveal\|--json]`, `awewarm-hub list invites [--reveal\|--token\|--json]`, `awewarm-hub config` (no flags = show resolved data dir), `awewarm-hub self-update --check` |
-| Admin — run on request | `awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]` (mints one-time codes; `--count` batch-mints codes that share name, expiry, and machine cap), `awewarm-hub revoke <awi_...>` (kill an invite: pending stops pairing, used suspends its tenant — reversible), `awewarm-hub restore <awi_...>` (undo), `awewarm-hub config --data-dir /data [--unset]`, `awewarm-hub self-update` |
+| Admin — run on request | `awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]` (mints one-time codes; `--count` batch-mints codes that share name, expiry, and machine cap), `awewarm-hub revoke <awi_...>` (kill an invite: pending stops pairing, used suspends its tenant — reversible), `awewarm-hub revoke <awi_...> --delete` (wipe the ledger row outright; a used one takes its tenant — irreversible, confirm first), `awewarm-hub restore <awi_...>` (undo), `awewarm-hub config --data-dir /data [--unset]`, `awewarm-hub self-update` |
 | Resident — the operator runs it in their own terminal or systemd, never from an agent session | `awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]` |
 
 ## Intent Router
@@ -31,6 +31,7 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 | "Who has joined? How much are they using?", "谁加入了/用量" | `awewarm-hub status` then `awewarm-hub list users`; `--details` / `--api` for per-connection detail. |
 | "Suspend alice while she's away", "停用一个租户" | `awewarm-hub revoke <her awi_...>` (the USED BY match in `list invites --reveal`) — suspension, not deletion; her token stops authenticating, everything stays on disk, the capacity slot frees. |
 | "Bring her back", "恢复" | `awewarm-hub restore <awi_...>` — re-takes a capacity slot, refuses when the hub is full. Machine pairings were never touched. |
+| "Wipe this invite from the ledger for good", "彻底删除邀请码/清理台账" | `awewarm-hub revoke <awi_...> --delete` — no revoked tombstone stays; a used one takes its tenant (token dead, slot freed, workspace kept on disk), `restore` cannot bring it back. Destructive: confirm the user truly wants deletion, not the reversible `revoke` (suspension). |
 | "An invite leaked / was sent to the wrong person", "邀请码泄露" | `awewarm-hub revoke awi_...` kills a pending code on the spot; a used one suspends the tenant it produced. |
 | "Give alice a second machine", "加机器额度" | The cap lives on her invite row: raise the `machines` value in `tenants.json` (a running serve adopts disk edits), or mint a fresh code with `invite --machines 2`. |
 | "Recover an invite code I already sent", "找回邀请码" | `awewarm-hub list invites --reveal` — codes are kept in the clear for exactly this; guard the data dir. |
@@ -86,13 +87,14 @@ awewarm-hub list invites          # every minted code: pending/used/expired/revo
 awewarm-hub list invites --reveal   # find the code (the USED BY column names the tenant)
 awewarm-hub revoke awi_...          # pending stops pairing; used suspends its tenant
 awewarm-hub restore awi_...         # undo; refuses when the hub is full
+awewarm-hub revoke awi_... --delete # wipe the row outright (irreversible; a used one takes its tenant, workspace kept)
 ```
 
 ## Core Rules
 
 1. Never run `awewarm-hub serve` from an agent session — it is a resident process the operator owns.
 2. Invite codes are one-time secrets and tenant tokens are live credentials: hand either out promptly, over a private channel; `revoke awi_...` the moment a code leaks.
-3. `revoke` is suspension, not deletion — prefer it over anything destructive; `restore` undoes it.
+3. `revoke` is suspension, not deletion — prefer it over anything destructive; `restore` undoes it. `revoke --delete` is the destructive one: the ledger row goes, a used code's tenant goes with it (workspace kept on disk), and `restore` has nothing to act on — run it only on an explicit ask.
 4. Users' plaintext API keys pass through the hub's RAM. State the trust rule before the user invites anyone they don't fully trust.
 5. Restarting `serve` is safe (keys re-push automatically) — but coordinate it with the user instead of surprising them.
 6. User-side operations (connect, delegate, take back) run plain `awewarm` on the user's machine — defer to the `awewarm` skill.

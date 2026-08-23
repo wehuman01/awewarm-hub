@@ -262,6 +262,22 @@ class LifecycleTests(HubCase):
         self.assertEqual(remote_client.fetch_state(self.url, token)["connections"], {})
         self.assertFalse(self.registry()["invites"][engine._hash_secret(code)].get("revokedAt"))
 
+    def test_delete_removes_the_tenant_keeps_the_workspace(self):
+        token, tenant_id = self.join("alice")
+        self.push_plan(token)
+        code = self.code_of(tenant_id)
+        self.hub.delete_invite(code)
+        registry = self.registry()
+        self.assertNotIn(engine._hash_secret(code), registry["invites"])  # no tombstone
+        self.assertNotIn(tenant_id, registry["tenants"])  # the tenant goes with its invite
+        self.assertTrue((self.data_dir / "tenants" / tenant_id).exists())  # workspace kept on disk
+        with self.assertRaises(remote_client.RemoteError) as ctx:
+            remote_client.fetch_state(self.url, token)
+        self.assertIn("invalid hub token", str(ctx.exception))
+        with self.assertRaises(ApiError) as ctx:  # the row is gone — nothing to restore
+            self.hub.restore(code)
+        self.assertIn("no such invite", str(ctx.exception))
+
     def test_release_keeps_the_pairing(self):
         token, _ = self.join("alice")
         result = remote_client.release(self.url, token)
@@ -803,6 +819,49 @@ class HubCliTests(IsolatedTestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("aborted", result.output)
         self.assertTrue(engine_hub.join(code)["token"].startswith("awt_"))
+
+    def test_delete_wipes_a_pending_invite_row(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="y\n")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("invite deleted for alice", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertNotIn(engine._hash_secret(code), registry["invites"])  # no revoked tombstone
+        with self.assertRaises(ApiError):
+            engine_hub.join(code)
+
+    def test_delete_takes_the_used_invites_tenant_with_it(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        joined = engine_hub.join(code)
+        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="y\n")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn(joined["tenantId"], result.output)
+        self.assertIn("workspace stays on disk", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertNotIn(engine._hash_secret(code), registry["invites"])
+        self.assertNotIn(joined["tenantId"], registry["tenants"])  # token dead, slot freed
+
+    def test_delete_can_purge_an_already_revoked_row(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        joined = engine_hub.join(code)
+        engine_hub.revoke(code)
+        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="y\n")
+        self.assertEqual(result.exit_code, 0)  # unlike plain revoke, a revoked row is deletable
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertNotIn(engine._hash_secret(code), registry["invites"])
+        self.assertNotIn(joined["tenantId"], registry["tenants"])
+
+    def test_delete_aborts_without_confirmation(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        result = invoke(["revoke", code, "--delete"] + self.dir_opt, input="n\n")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("aborted", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertIn(engine._hash_secret(code), registry["invites"])
 
     def test_restore_by_tenant_id_is_refused_with_guidance(self):
         engine_hub = engine.Hub(self.data_dir)
