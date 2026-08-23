@@ -137,14 +137,17 @@ live in server RAM only.
               help="Delegated connections each tenant may keep; adopted live.")
 @click.option("--max-machines", "max_machines", type=int, default=None,
               help="Machine cap stamped into each new invite (existing codes keep theirs); adopted live.")
+@click.option("--persist-keys", "persist_keys", type=click.Choice(["on", "off"]), default=None,
+              help="Allow tenants to store API keys on this box (off by default; their own client still asks them per connection). Switching to off purges every stored key at once.")
 @click.option("--reset", "reset_caps", is_flag=True,
               help="Clear the saved caps; enforcement falls back to the defaults (10 tenants, 5 conns, 1 machine) until set again.")
-def config_command(data_dir, unset_dir, max_tenants, max_conns_per_tenant, max_machines, reset_caps):
+def config_command(data_dir, unset_dir, max_tenants, max_conns_per_tenant, max_machines, persist_keys, reset_caps):
     """Show or set hub settings: the data dir and the capacity caps.
 
     \b
       awewarm-hub config                            # show what's in effect and where from
       awewarm-hub config --max-tenants 20           # a running serve adopts it, no restart
+      awewarm-hub config --persist-keys on          # allow tenants to store keys here (off default)
       awewarm-hub config --data-dir /data           # persist the data dir (a --data-dir flag
                                                     #   to serve still overrides once)
     """
@@ -178,6 +181,17 @@ def config_command(data_dir, unset_dir, max_tenants, max_conns_per_tenant, max_m
         click.echo("  awewarm-hub commands on this machine use it unless --data-dir is passed")
         return
     engine = Hub(_resolve_server_data_dir(data_dir))
+    if persist_keys is not None:
+        engine.set_persist_keys(persist_keys == "on")
+        if persist_keys == "on":
+            click.echo("✓ Tenants may now store API keys on this box (keys.json per workspace, plaintext 0600)")
+            click.echo("  ⚠ each stored key is readable with disk access — only allow it if you accept that")
+            click.echo("  their own client still confirms with them per connection; revoking an invite purges its keys")
+        else:
+            click.echo("✓ Tenants can no longer store API keys here — every stored one was just purged")
+            click.echo("  their connections keep ticking (keys return to server RAM on their next sync)")
+        click.echo("  a running serve adopts the change without a restart")
+        return
     if caps_given:
         engine.set_caps(max_tenants, max_conns_per_tenant, max_machines, reset=reset_caps)
         click.echo(
@@ -196,6 +210,9 @@ def config_command(data_dir, unset_dir, max_tenants, max_conns_per_tenant, max_m
     click.echo(f"max machines per invite: {engine.max_machines} ({'saved' if record.get('maxMachines') is not None else 'the default'})")
     click.echo("  change with: awewarm-hub config --max-tenants 20 --max-conns-per-tenant 10 --max-machines 2")
     click.echo("  a running serve adopts cap changes without a restart; --reset clears them")
+    click.echo(f"persist keys: {'on' if record.get('persistKeys') else 'off'}"
+               f"{' (the default)' if record.get('persistKeys') is None else ''} — tenants may not store API keys on this box unless you allow it")
+    click.echo("  change with: awewarm-hub config --persist-keys on (warns) / off (purges every stored key)")
 
 
 def _probe_serve(record):

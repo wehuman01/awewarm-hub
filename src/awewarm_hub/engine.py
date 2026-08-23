@@ -95,6 +95,18 @@ class Tenant:
         restart — the user's machine re-pushes them on its sync cycle."""
         self._warm = None
 
+    def drop_persisted_keys(self):
+        """Purge this tenant's keys.json (the owner-opt-in on-disk keyring).
+
+        Operator paths call this — storage switched off, invite revoked or
+        deleted. A loaded workspace purges through WarmServer so its RAM
+        mirror cannot rewrite the file afterwards; an unloaded one just
+        loses the file."""
+        if self._warm is not None:
+            self._warm.purge_persisted_keys(self.id)
+        else:
+            (self.workspace_dir / "keys.json").unlink(missing_ok=True)
+
 
 class Hub:
     """The multi-tenant engine behind `awewarm-hub serve`.
@@ -135,6 +147,9 @@ class Hub:
             max_machines if max_machines is not None
             else self.serve_record.get("maxMachines", DEFAULT_MAX_MACHINES)
         )
+        # Off unless the operator allowed it (`config --persist-keys on`);
+        # record_launch carries the setting across serve restarts.
+        self.persist_keys = bool(self.serve_record.get("persistKeys"))
         self._registry_stamp = self._stamp()
         self.tenants = {
             tenant_id: Tenant(tenant_id, record, self.data_dir / "tenants")
@@ -184,6 +199,7 @@ class Hub:
                         del fresh["invites"][digest]
                         if used_by:
                             fresh["tenants"].pop(used_by, None)
+                            (self.data_dir / "tenants" / used_by / "keys.json").unlink(missing_ok=True)
                     for tenant_id, record in fresh["tenants"].items():
                         suspended = record.pop("suspendedAt", None)
                         if suspended:
@@ -251,7 +267,8 @@ class Hub:
                     tenant = self.tenants[tenant_id]
                     tenant.record = fresh["tenants"][tenant_id]
                     if self._suspension_of(tenant_id):
-                        tenant.release_workspace()  # a revoke in another process frees its keys from RAM
+                        tenant.drop_persisted_keys()  # a revoke in another process takes its disk keys too
+                        tenant.release_workspace()  # ...and frees its keys from RAM
                 else:  # deleted by the operator in another process
                     self.tenants.pop(tenant_id, None)
             for tenant_id, record in fresh["tenants"].items():
@@ -268,6 +285,16 @@ class Hub:
                 self.max_conns_per_tenant = serve["maxConnsPerTenant"]
             if "maxMachines" in serve:
                 self.max_machines = serve["maxMachines"]
+            # A persistence flip lands here too: off purges every tenant's
+            # keys.json in this process (the config process unlinked files;
+            # loaded workspaces' RAM mirrors must go so they never rewrite).
+            new_persist = bool(serve.get("persistKeys"))
+            if new_persist != self.persist_keys:
+                self.persist_keys = new_persist
+                if not new_persist:
+                    for tenant in self.tenants.values():
+                        tenant.drop_persisted_keys()
+                    self.log("key persistence off — persisted keys purged from every tenant")
             self.serve_record = serve
             self._registry_stamp = stamp
 
@@ -277,7 +304,8 @@ class Hub:
     def record_launch(self, bind, port):
         """Stamp the effective knobs into the registry so `awewarm-hub status`
         (a separate process) can report caps and find the live endpoint. Last
-        launch wins; nothing here is secret."""
+        launch wins; nothing here is secret. persistKeys rides along from the
+        prior record — the `config` command owns it, not serve flags."""
         record = {
             "version": __version__,
             "awewarmVersion": awewarm_version,
@@ -287,6 +315,7 @@ class Hub:
             "maxTenants": self.max_tenants,
             "maxConnsPerTenant": self.max_conns_per_tenant,
             "maxMachines": self.max_machines,
+            "persistKeys": self.persist_keys,
         }
         with self._registry_transaction():
             self.registry["serve"] = record
@@ -326,6 +355,27 @@ class Hub:
             f"caps now {self.max_tenants} tenants, {self.max_conns_per_tenant} conns each, "
             f"{self.max_machines} machine(s) per invite" + (" (reset)" if reset else "")
         )
+
+    def set_persist_keys(self, enabled):
+        """Allow or forbid tenants storing API keys on this box (`config
+        --persist-keys on|off`) — off is the default, adopted live by a
+        running serve like the caps.
+
+        Allowing changes nothing by itself: each connection's owner must also
+        opt in per connection (their client confirms with them). Forbidding
+        purges every tenant's keys.json in the same breath — "no keys on my
+        disk" must be true the moment it is said; clients re-push keys to RAM
+        on their next sync, so no warm-up is lost."""
+        enabled = bool(enabled)
+        with self._registry_transaction():
+            self.registry.setdefault("serve", {})["persistKeys"] = enabled
+            self._save()
+        self.serve_record = self.registry["serve"]
+        self.persist_keys = enabled
+        if not enabled:
+            for tenant in self.tenants.values():
+                tenant.drop_persisted_keys()
+        self.log("key persistence on" if enabled else "key persistence off — persisted keys purged")
 
     # --- pairing ---
 
@@ -480,7 +530,9 @@ class Hub:
             self._save()
         used_by = entry.get("usedBy")
         if used_by and used_by in self.tenants:
-            self.tenants[used_by].release_workspace()
+            tenant = self.tenants[used_by]
+            tenant.drop_persisted_keys()  # a suspended tenant's keys leave the disk with the RAM
+            tenant.release_workspace()
         who = f" — {used_by} suspended" if used_by else ""
         self.log(f"invite revoked ({entry.get('note') or 'no note'}){who}")
         was_expired = expires is not None and expires <= now
@@ -506,8 +558,10 @@ class Hub:
             used_by = entry.get("usedBy")
             del self.registry["invites"][digest]
             if used_by:
+                removed = self.tenants.pop(used_by, None)
+                if removed is not None:
+                    removed.drop_persisted_keys()  # its workspace stays; its keys do not
                 self.registry["tenants"].pop(used_by, None)
-                self.tenants.pop(used_by, None)
             self._save()
         who = f" — {used_by} removed" if used_by else ""
         self.log(f"invite deleted ({entry.get('note') or 'no note'}){who}")

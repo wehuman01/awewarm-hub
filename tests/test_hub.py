@@ -617,6 +617,106 @@ class MigrationTests(unittest.TestCase):
         self.assertIn(tenant_id, again.registry["tenants"])
 
 
+class PersistKeysTests(HubCase):
+    """The owner-opt-in key storage, hub side: off unless the operator allows
+    it, on only for connections whose user confirmed, purged the moment either
+    side withdraws (switch off, revoke, delete)."""
+
+    def push_persist(self, token, conn_id="glm"):
+        conn = plan_connection(fixed_at=("03:00",), days="every-day")
+        return remote_client.push_connection(
+            self.url, token, conn_id, conn, "sk-test", TZ, persist=True,
+        )
+
+    def keys_file(self, tenant_id):
+        return self.data_dir / "tenants" / tenant_id / "keys.json"
+
+    def test_default_off_refuses_persisted_pushes(self):
+        token, tenant_id = self.join("alice")
+        with self.assertRaises(remote_client.RemoteError) as ctx:
+            self.push_persist(token)
+        self.assertIn("403", str(ctx.exception))
+        self.assertIn("awewarm-hub config --persist-keys on", str(ctx.exception))
+        self.assertFalse(self.keys_file(tenant_id).exists())
+
+    def test_plain_pushes_still_work_with_storage_off(self):
+        token, _ = self.join("alice")
+        self.push_plan(token)  # RAM-only, the default, unaffected
+
+    def test_operator_allow_plus_user_optin_persists_the_key(self):
+        self.hub.set_persist_keys(True)  # `awewarm-hub config --persist-keys on`
+        token, tenant_id = self.join("alice")
+        self.push_persist(token)
+        keys = self.keys_file(tenant_id)
+        self.assertTrue(keys.exists())
+        self.assertEqual(json.loads(keys.read_text()), {"glm": "sk-test"})
+        import stat as stat_module
+        self.assertEqual(stat_module.S_IMODE(keys.stat().st_mode), 0o600)
+        view = remote_client.fetch_state(self.url, token)
+        self.assertTrue(view["connections"]["glm"]["keyPersisted"])
+
+    def test_persisted_key_survives_a_serve_restart(self):
+        self.hub.set_persist_keys(True)
+        token, tenant_id = self.join("alice")
+        self.push_persist(token)
+        revived = engine.Hub(self.data_dir)  # what a restarted serve loads
+        self.assertTrue(revived.persist_keys)  # the setting rides in the registry
+        warm = revived.tenants[tenant_id].warm
+        self.assertEqual(warm.missing_keys(), [])  # ticking without a re-push
+
+    def test_switching_off_purges_every_stored_key(self):
+        self.hub.set_persist_keys(True)
+        token, tenant_id = self.join("alice")
+        self.push_persist(token)
+        self.hub.set_persist_keys(False)  # "no keys on my disk", said and done
+        self.assertFalse(self.keys_file(tenant_id).exists())
+        with self.assertRaises(remote_client.RemoteError):
+            self.push_persist(token)
+
+    def test_switch_flip_adopted_by_a_running_serve(self):
+        token, tenant_id = self.join("alice")
+        operator = engine.Hub(self.data_dir)  # a separate `config` process
+        operator.set_persist_keys(True)
+        self.push_persist(token)
+        operator.set_persist_keys(False)
+        self.hub._refresh()  # what every tenant action and tick do
+        self.assertFalse(self.hub.persist_keys)
+        self.assertFalse(self.keys_file(tenant_id).exists())
+        self.assertEqual(self.hub.tenants[tenant_id].warm.missing_keys(), [])  # RAM keeps ticking
+
+    def test_revoking_an_invite_purges_its_tenants_keys(self):
+        self.hub.set_persist_keys(True)
+        token, tenant_id = self.join("alice")
+        self.push_persist(token)
+        self.assertTrue(self.keys_file(tenant_id).exists())
+        self.hub.revoke(self.code_of(tenant_id))
+        self.assertFalse(self.keys_file(tenant_id).exists())
+
+    def test_deleting_an_invite_purges_its_tenants_keys(self):
+        self.hub.set_persist_keys(True)
+        token, tenant_id = self.join("alice")
+        self.push_persist(token)
+        self.hub.delete_invite(self.code_of(tenant_id))
+        self.assertFalse(self.keys_file(tenant_id).exists())
+
+    def test_revoke_in_another_process_purges_via_refresh(self):
+        self.hub.set_persist_keys(True)
+        token, tenant_id = self.join("alice")
+        self.push_persist(token)
+        engine.Hub(self.data_dir).revoke(self.code_of(tenant_id))  # the CLI process
+        self.hub._refresh()  # the live serve adopts the revocation
+        self.assertFalse(self.keys_file(tenant_id).exists())
+
+    def test_record_launch_carries_the_setting_across_restarts(self):
+        operator = engine.Hub(self.data_dir)
+        operator.set_persist_keys(True)
+        relaunched = engine.Hub(self.data_dir)
+        relaunched.record_launch("127.0.0.1", 8790)  # serve restarts, restamping
+        self.assertTrue((self.data_dir / "tenants.json").exists())
+        fresh = engine.Hub(self.data_dir)
+        self.assertTrue(fresh.persist_keys)  # the operator's choice outlived it
+
+
 class UsageTests(HubCase):
     @mock.patch("awewarm.transport.send_activation", return_value={"ok": True, "detail": ""})
     def test_tick_counts_activations_per_tenant(self, send):

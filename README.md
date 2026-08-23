@@ -101,6 +101,8 @@ awewarm-hub invite restore <awi_...>           # undo a revoke
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # capacity caps; a running serve adopts them without a restart
+awewarm-hub config --persist-keys on|off       # may tenants store API keys on this box?
+                                               #   off by default; off purges every stored key at once
 awewarm-hub self-update [--check]              # upgrade from PyPI
 ```
 
@@ -110,14 +112,16 @@ Each tenant gets a private workspace under `tenants/<id>/` (connections, state, 
 
 One trust rule, stated plainly: the hub fires requests with its users' API keys, so their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root); a shared VPS with strangers is not that.
 
-API keys never touch disk — they live in server RAM and are re-pushed by each user's machine after a restart. Invite codes and tenant tokens are the on-disk exceptions above, kept recoverable on purpose; guard the data dir.
+API keys never touch disk **by default** — they live in server RAM and are re-pushed by each user's machine after a restart. Invite codes and tenant tokens are the on-disk exceptions above, kept recoverable on purpose; guard the data dir.
+
+One more opt-in exception exists for users whose machines are rarely online: with `awewarm-hub config --persist-keys on` (default off, warns when enabled) a user may confirm per connection (`awewarm config set <id> --persist-key on`) that their key is stored in their workspace's `keys.json` (plaintext, 0600), so a hub restart keeps their warm-ups ticking with no re-push. Both sides can withdraw at any moment: the user turns the flag off (the hub deletes the key), the operator flips the switch off (every stored key on the box is purged at once), and revoking or deleting an invite purges that tenant's keys — the workspace otherwise stays, as always. The feature is discouraged by design; leaving everything off is the recommended posture.
 
 ## Security
 
 Short version for users: every ordinary leakage path is closed by design; the one thing that remains is trusting the hub's machine.
 
 - **Account logins never leave your machine.** The hub only accepts API-key (subscription) connections; CLI-account (OAuth) credentials are rejected at the wire and live on wherever you logged in. There is no username, password, or session cookie to leak.
-- **Your API key exists on the hub in RAM only.** Never written to disk (connection files carry no key — after a restart your own machine re-pushes it), never logged (activation results are scrubbed of keys and auth headers), and no endpoint reads one back — `/v1/state` reports only whether a key is present. Traffic rides the operator's HTTPS tunnel end to end.
+- **Your API key exists on the hub in RAM only** (unless you explicitly opt into `--persist-key` — discouraged; then it sits in your workspace's `keys.json` in plaintext, 0600, and disappears again the moment either you or the operator withdraws). Never logged (activation results are scrubbed of keys and auth headers), and no endpoint reads one back — `/v1/state` reports only whether a key is present. Traffic rides the operator's HTTPS tunnel end to end.
 - **A stolen tenant token is not a stolen API key.** With your `awt_...` an attacker can manage and trigger *your* connections, but cannot read a stored key and cannot send it to their own server — replacing a connection always pushes a fresh key that overwrites the old one. If a token leaks: have the operator `revoke` your invite (the token dies at once), re-pair with a fresh code; your machine re-pushes everything.
 - **Tenants are invisible to each other** — private workspaces, constant-time token-hash comparison, a 60 req/min per-tenant rate limit.
 

@@ -101,6 +101,8 @@ awewarm-hub invite restore <awi_...>           # 撤销一次 revoke
 awewarm-hub config [--data-dir /data|--unset]  # 本机默认数据目录
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # 容量上限;运行中的 serve 无需重启即采纳
+awewarm-hub config --persist-keys on|off       # 是否允许租户把 API key 落盘到本机
+                                               #   默认 off;切回 off 会一次性清空所有已存 key
 awewarm-hub self-update [--check]              # 从 PyPI 升级
 ```
 
@@ -110,14 +112,16 @@ awewarm-hub self-update [--check]              # 从 PyPI 升级
 
 一条信任规则,直说:hub 用用户的 API key 发送请求,因此明文 key 会经过它的内存。Hub 适合信任机器运维者(和 root)的人;和陌生人共享 VPS 不属于这种情况。
 
-API key 永远不落盘 —— 只存在于服务器内存中,重启后由每个用户的机器重新推送。(邀请码和租户 token 是上述刻意的磁盘例外,为找回而保留;请保管好数据目录。)
+API key **默认**永远不落盘 —— 只存在于服务器内存中,重启后由每个用户的机器重新推送。(邀请码和租户 token 是上述刻意的磁盘例外,为找回而保留;请保管好数据目录。)
+
+对机器长期离线的用户另有一个可选项:运维者先 `awewarm-hub config --persist-keys on`(默认关闭,开启时警告),用户再按连接确认(`awewarm config set <id> --persist-key on`),key 便会存入其工作区的 `keys.json`(明文,0600),hub 重启后无需补推、保温不断。任一侧随时可撤:用户关掉开关(hub 立即删除该 key)、运维者切回 off(盒上所有已存 key 一次性清空)、吊销或删除邀请码(该租户的 key 一并清除 —— 工作区其余照旧保留)。该功能设计上就不鼓励;全部保持关闭是推荐姿态。
 
 ## 安全性
 
 给用户的一句话版本:所有常规泄漏路径都已被设计堵死;唯一剩下的,是信任 hub 所在的那台机器。
 
 - **账户登录信息永远不离开你的机器。** hub 只接受 API key(订阅)连接;CLI 账号(OAuth)凭据在协议层即被拒绝,留在你登录它的那台机器上。不存在可泄漏的用户名、密码或会话 cookie。
-- **你的 API key 在 hub 上只存在于内存。** 从不落盘(连接文件不含 key —— 重启后由你自己的机器重新推送),从不进日志(激活结果不含 key 和认证头),也没有任何端点能把它读回 —— `/v1/state` 只报告 key 是否在位。流量全程走运维者的 HTTPS 隧道。
+- **你的 API key 在 hub 上只存在于内存**(除非你主动选择 `--persist-key` —— 不建议;那时它以明文存在你工作区的 `keys.json` 里,0600,你或运维者任一方撤回即消失)。从不进日志(激活结果不含 key 和认证头),也没有任何端点能把它读回 —— `/v1/state` 只报告 key 是否在位。流量全程走运维者的 HTTPS 隧道。
 - **租户 token 被盗 ≠ API key 被盗。** 拿到你的 `awt_...` 的人能管理和触发**你的**连接,但读不到已存储的 key,也无法把它发到自己的服务器 —— 替换连接必须推送新 key,而新 key 会覆盖旧的。token 泄漏了:请运维者 `revoke` 你的邀请码(token 立即失效),拿新码重新配对;你的机器会重新推送一切。
 - **租户之间互相不可见** —— 私有工作区、常数时间哈希比对、每租户 60 请求/分钟限速。
 
