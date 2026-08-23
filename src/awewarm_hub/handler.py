@@ -20,6 +20,11 @@ class HubHandler(_Handler):
     def _healthz_payload(self):
         return {"ok": True, "version": __version__, "claimed": True, "hub": True}
 
+    def _view_extras(self, warm, tenant):
+        # The view's own "version" is the engine package's; without this a
+        # hub answers 0.5.x while healthz says 0.5.y and users see a mismatch.
+        return {"hubVersion": __version__}
+
     def _join(self, body, machine):
         return self.hub.join(body.get("invite"), machine)
 

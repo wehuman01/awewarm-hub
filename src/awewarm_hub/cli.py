@@ -273,7 +273,7 @@ def status_command(data_dir, show_details):
     for row in rows:
         conns = row["connections"]
         usage = row["usage"] or {}
-        seen = _fmt_moment(schedule.parse_ts(row["lastSeenAt"]), now) if row["lastSeenAt"] else "never"
+        seen = _fmt_seen(row, now)
         tenant_rows.append([
             row["tenant"],
             row["note"] or "—",
@@ -403,7 +403,7 @@ def list_users_command(data_dir, show_api, show_codes, as_json):
     for row in rows:
         conns = row["connections"]
         usage = row["usage"] or {}
-        seen = _fmt_moment(schedule.parse_ts(row["lastSeenAt"]), now) if row["lastSeenAt"] else "never"
+        seen = _fmt_seen(row, now)
         paired = schedule.parse_ts(row["createdAt"])
         tenant_rows.append([
             row["tenant"],
@@ -698,6 +698,29 @@ def _fmt_moment(moment, now):
     if moment.date() == now.date():
         return f"today {moment.strftime('%H:%M')}"
     return moment.strftime("%Y-%m-%d %H:%M")
+
+
+def _fmt_seen(row, now):
+    """LAST SEEN in the tenant's own zone (its first connection's, else the
+    box's), offset spelled out — the box usually runs UTC, the tenant usually
+    doesn't, and the point of the column is comparing with the tenant's own
+    `awewarm status` footer."""
+    seen = schedule.parse_ts(row.get("lastSeenAt"))
+    if seen is None:
+        return "never"
+    tz_name = next((c.get("timezone") for c in row.get("connections", []) if c.get("timezone")), None)
+    try:
+        zone = timezone_for(tz_name) if tz_name else now.tzinfo
+    except ValueError:
+        zone = now.tzinfo
+    local = seen.astimezone(zone)
+    return f"{_fmt_moment(local, now.astimezone(zone))} ({_tz_tag(local)})"
+
+
+def _tz_tag(moment):
+    off = moment.strftime("%z")  # +0800, or +0530 where zones run half-hour
+    tag = f"{off[0]}{int(off[1:3]):02d}"
+    return tag if off[3:] == "00" else f"{tag}:{int(off[3:5]):02d}"
 
 
 def _mask_invite(code):

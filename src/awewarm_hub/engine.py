@@ -49,9 +49,6 @@ INVITE_TTL_HOURS = 48
 # Generous for honest clients (status + sync make a handful of calls an hour)
 # while still stopping a looping client from monopolizing the process.
 HUB_RATE_PER_MINUTE = 60
-# Persisting lastSeen on every request would rewrite tenants.json constantly;
-# refreshing it at most this often keeps `awewarm-hub list users` honest to a small window.
-HUB_SEEN_PRECISION = timedelta(minutes=10)
 
 
 class Tenant:
@@ -68,6 +65,7 @@ class Tenant:
         self.record = record  # the registry entry: tokenHash, note, createdAt, lastSeenAt, usage, machines
         self.workspace_dir = Path(tenants_root) / tenant_id
         self.requests = deque()  # monotonic timestamps, the rate-limit window
+        self.pending_seen = None  # RAM-only lastSeenAt stamp; tick()'s flush persists it
         self._warm = None
 
     @property
@@ -582,15 +580,27 @@ class Hub:
             return tenant
 
     def _refresh_seen(self, tenant):
-        now = datetime.now().astimezone()
-        seen = schedule.parse_ts(tenant.record.get("lastSeenAt"))
-        if seen is not None and now - seen < HUB_SEEN_PRECISION:
-            return
+        """Stamp the tenant as seen — RAM only, never a registry write.
+
+        Rewriting tenants.json per tenant made LAST SEEN cost one full
+        registry write per tenant per window; the stamp now rides the Tenant
+        object (like the rate-limit queue, it survives registry adoption)
+        and _flush_seen persists every pending stamp in a single write, so
+        `list users` trails reality by at most one tick (~a minute)."""
+        tenant.pending_seen = datetime.now().astimezone()
+
+    def _flush_seen(self):
+        """Persist the pending seen stamps; the tick loop calls this."""
         with self._registry_transaction():
-            if tenant.id not in self.tenants:
-                raise ApiError(401, "hub token was revoked during this request")
-            tenant.record["lastSeenAt"] = schedule.iso(now)
-            self._save()
+            pending = [
+                (tenant, tenant.pending_seen) for tenant in self.tenants.values()
+                if tenant.pending_seen is not None
+            ]
+            for tenant, when in pending:
+                tenant.pending_seen = None
+                tenant.record["lastSeenAt"] = schedule.iso(when)
+            if pending:
+                self._save()
 
     # --- quotas and usage ---
 
@@ -660,6 +670,7 @@ class Hub:
     # --- the tick: every tenant's workspace in one pass ---
 
     def tick(self, now_fn=None):
+        self._flush_seen()
         fired, held = 0, []
         with self._registry_transaction():
             tenants = [

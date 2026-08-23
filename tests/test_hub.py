@@ -93,6 +93,13 @@ class PairingTests(HubCase):
         self.assertTrue(health["claimed"])  # auth is per-token; nothing to pre-claim
         self.assertEqual(health["version"], awewarm_hub.__version__)
 
+    def test_state_view_advertises_the_hub_version(self):
+        token, _ = self.join("alice")
+        view = remote_client.fetch_state(self.url, token)
+        # the view's own "version" is the engine package's; the hub's rides along
+        self.assertEqual(view["hubVersion"], awewarm_hub.__version__)
+        self.assertEqual(view["version"], solo_server.__version__)
+
     def test_join_returns_a_working_token(self):
         token, tenant_id = self.join("alice")
         self.assertTrue(tenant_id.startswith("t_"))
@@ -376,6 +383,42 @@ class MachineTests(HubCase):
         joined = remote_client.join(self.url, code)
         remote_client.fetch_state(self.url, joined["token"], machine="awm_desktop")
         remote_client.fetch_state(self.url, joined["token"], machine="awm_laptop")
+
+
+class SeenStampTests(HubCase):
+    """LAST SEEN: stamped in RAM per request, persisted once per tick.
+
+    A request must never rewrite tenants.json — at N active tenants the old
+    per-tenant writes cost N full-registry writes per window; the flush
+    collapses any number of stamps into one."""
+
+    def test_a_request_stamps_ram_but_never_writes_the_registry(self):
+        token, tenant_id = self.join("alice")
+        remote_client.fetch_state(self.url, token)  # first contact pairs the machine
+        before = self.registry()["tenants"][tenant_id]
+        remote_client.fetch_state(self.url, token)
+        self.assertIsNotNone(self.hub.tenants[tenant_id].pending_seen)
+        self.assertEqual(self.registry()["tenants"][tenant_id], before)
+
+    def test_tick_flushes_every_pending_stamp_in_one_write(self):
+        alice, alice_id = self.join("alice")
+        bob, bob_id = self.join("bob")
+        self.push_plan(alice)
+        self.push_plan(bob)
+        remote_client.fetch_state(self.url, alice)
+        remote_client.fetch_state(self.url, bob)
+        with mock.patch("awewarm_hub.engine._write_json", wraps=engine._write_json) as write:
+            self.hub.tick(now_fn=lambda conn: at("00:00"))  # nothing due; flush only
+        write.assert_called_once()
+        for tenant_id in (alice_id, bob_id):
+            self.assertIsNone(self.hub.tenants[tenant_id].pending_seen)
+            self.assertTrue(self.registry()["tenants"][tenant_id]["lastSeenAt"])
+
+    def test_a_crash_loses_at_most_the_pending_stamps(self):
+        token, tenant_id = self.join("alice")
+        remote_client.fetch_state(self.url, token)  # stamped, never flushed
+        fresh = engine.Hub(self.data_dir)  # what a restart reconstructs
+        self.assertIsNone(fresh.registry["tenants"][tenant_id].get("lastSeenAt"))
 
 
 class CrossProcessTests(HubCase):
@@ -760,6 +803,28 @@ class HubCliTests(IsolatedTestCase):
         self.assertIn("MODE", result.output)
         self.assertIn(TZ, result.output)
         self.assertNotIn("per-connection detail", result.output)  # the hint steps aside
+
+    def stamp_seen(self, engine_hub, tenant_id, iso):
+        with engine_hub._registry_transaction():
+            engine_hub.tenants[tenant_id].record["lastSeenAt"] = iso
+            engine_hub._save()
+
+    def test_last_seen_renders_in_the_tenants_timezone(self):
+        engine_hub, joined = self.paired_hub_with_connection()
+        self.stamp_seen(engine_hub, joined["tenantId"], "2026-08-20T09:16:00+00:00")
+        for args in (["status"], ["list", "users"]):
+            result = invoke(args + self.dir_opt)
+            self.assertEqual(result.exit_code, 0)
+            # a UTC box, a Shanghai tenant: what their own status footer shows
+            self.assertIn("2026-08-20 17:16 (+08)", result.output)
+
+    def test_last_seen_without_connections_falls_back_to_the_box_zone(self):
+        engine_hub = engine.Hub(self.data_dir)
+        joined = engine_hub.join(engine_hub.mint_invite("alice"))
+        self.stamp_seen(engine_hub, joined["tenantId"], "2026-08-20T09:16:00+00:00")
+        result = invoke(["list", "users"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertRegex(result.output, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} \([+-]\d{2}(:\d{2})?\)")
 
     def test_status_without_a_launch_record_shows_unknown_caps(self):
         self.paired_hub_with_connection()
