@@ -97,6 +97,7 @@ awewarm-hub list invites [--reveal|--token|--json]  # 所有已签发邀请码:�
 awewarm-hub revoke <awi_...>                   # 作废一个邀请码:待用的立即失效,已用的停用其租户(可逆)
 awewarm-hub revoke <awi_...> --delete          # 从台账中彻底删除该行;已用的连其租户一并删除(不可逆)
 awewarm-hub restore <awi_...>                  # 撤销一次 revoke
+awewarm-hub rename <awi_...> <name>            # 重命名邀请码的备注;已用的连其租户一并改名
 awewarm-hub config [--data-dir /data|--unset]  # 本机默认数据目录
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # 容量上限;运行中的 serve 无需重启即采纳

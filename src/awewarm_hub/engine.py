@@ -510,6 +510,27 @@ class Hub:
         self.log(f"invite restored ({entry.get('note') or 'no note'})")
         return {"ok": True, "tenant": used_by}
 
+    def rename_invite(self, code, note):
+        """Set an invite's note (`rename awi_... <name>`).
+
+        The note is the label `list invites` and `list users` show — who the
+        code is for. A used invite's tenant carries a copy set at join time,
+        so it follows here to keep both listings in agreement; the code,
+        status, caps, and expiry are untouched.
+        """
+        with self._registry_transaction():
+            entry = self.registry["invites"].get(_hash_secret(code))
+            if entry is None:
+                raise ApiError(404, f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
+            entry["note"] = note
+            used_by = entry.get("usedBy")
+            if used_by and used_by in self.registry["tenants"]:
+                self.registry["tenants"][used_by]["note"] = note
+            self._save()
+        who = f" — {used_by} follows" if used_by else ""
+        self.log(f"invite renamed to {note}{who}")
+        return {"ok": True, "tenant": used_by, "note": note}
+
     def auth(self, bearer, machine=None):
         """Bearer token → tenant, behind the machine cap and rate-limit gate."""
         with self.lock:

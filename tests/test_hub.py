@@ -882,6 +882,41 @@ class HubCliTests(IsolatedTestCase):
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
         self.assertIn(engine._hash_secret(code), registry["invites"])
 
+    def test_rename_relabels_a_pending_invite(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        result = invoke(["rename", code, "team-a"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("invite renamed to team-a", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertEqual(registry["invites"][engine._hash_secret(code)]["note"], "team-a")
+        listed = invoke(["list", "invites", "--reveal"] + self.dir_opt)
+        self.assertIn("team-a", listed.output)
+
+    def test_rename_takes_the_used_invites_tenant_with_it(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        joined = engine_hub.join(code)
+        result = invoke(["rename", code, "bob"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn(joined["tenantId"], result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertEqual(registry["invites"][engine._hash_secret(code)]["note"], "bob")
+        self.assertEqual(registry["tenants"][joined["tenantId"]]["note"], "bob")  # list users follows
+        users = invoke(["list", "users"] + self.dir_opt)
+        self.assertIn("bob", users.output)
+
+    def test_rename_rejects_unknown_codes_and_bad_names(self):
+        engine_hub = engine.Hub(self.data_dir)
+        engine_hub.mint_invite("alice")
+        result = invoke(["rename", "awi_" + "x" * 20, "bob"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("no such invite", result.output)
+        code = engine_hub.list_invites()[0]["code"]
+        result = invoke(["rename", code, " "] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("single non-empty line", result.output)
+
     def test_restore_by_tenant_id_is_refused_with_guidance(self):
         engine_hub = engine.Hub(self.data_dir)
         joined = engine_hub.join(engine_hub.mint_invite("alice"))

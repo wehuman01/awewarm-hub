@@ -580,6 +580,29 @@ def restore_command(code, data_dir):
         die(f"could not restore {code}:\n{exc}")
 
 
+@cli.command("rename")
+@click.argument("code")
+@click.argument("name")
+@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
+def rename_command(code, name, data_dir):
+    """Rename an invite's note (awi_...); a used one's tenant follows.
+
+    The note is the label `list invites` and `list users` show — who the
+    code is for. The code, status, caps, and expiry are untouched."""
+    _require_code_target(code)
+    if not name.strip() or "\n" in name:
+        die("the name must be a single non-empty line")
+    engine = Hub(_resolve_server_data_dir(data_dir))
+    try:
+        result = engine.rename_invite(code, name.strip())
+    except ApiError as exc:  # registry busy or unknown
+        die(f"could not rename the invite:\n{exc}")
+    if result.get("tenant"):
+        click.echo(f"✓ invite renamed to {result['note']} — tenant {result['tenant']} follows")
+    else:
+        click.echo(f"✓ invite renamed to {result['note']}")
+
+
 @cli.command("self-update")
 @click.option("--check", "check_only", is_flag=True, help="Show versions without updating.")
 def self_update_command(check_only):
