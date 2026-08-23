@@ -82,6 +82,19 @@ class Tenant:
             self._warm = WarmServer(self.workspace_dir)
         return self._warm
 
+    def release_workspace(self):
+        """Drop the RAM workspace — the config/state mirror and the API-key
+        keyring — leaving the files on disk.
+
+        Revocation is the caller: a suspended tenant's users' keys must not
+        sit in memory beyond their authorization. A request already holding
+        the old workspace finishes on it (Python keeps it alive while
+        referenced); nothing new can reach one — auth rejects the token and
+        the tick skips the tenant. Restore needs no counterpart: `warm`
+        reloads lazily, and keys return the way they do after a serve
+        restart — the user's machine re-pushes them on its sync cycle."""
+        self._warm = None
+
 
 class Hub:
     """The multi-tenant engine behind `awewarm-hub serve`.
@@ -218,7 +231,9 @@ class Hub:
         join with an invite minted after it started and keep honoring revoked
         tokens. Disk wins for persisted tenant records because every mutation
         saves synchronously under the registry transaction lock. Existing Tenant
-        objects stay alive so their RAM keyrings and rate-limit queues survive."""
+        objects stay alive so their RAM keyrings and rate-limit queues survive —
+        except a tenant the fresh registry shows as suspended: its workspace
+        (keyring included) is dropped here, the revoke-in-another-process case."""
         with self.lock:
             stamp = self._stamp()
             if stamp is None or stamp == self._registry_stamp:
@@ -233,8 +248,11 @@ class Hub:
             self.registry = fresh
             for tenant_id in list(self.tenants):
                 if tenant_id in fresh["tenants"]:
-                    self.tenants[tenant_id].record = fresh["tenants"][tenant_id]
-                else:  # revoked by the operator in another process
+                    tenant = self.tenants[tenant_id]
+                    tenant.record = fresh["tenants"][tenant_id]
+                    if self._suspension_of(tenant_id):
+                        tenant.release_workspace()  # a revoke in another process frees its keys from RAM
+                else:  # deleted by the operator in another process
                     self.tenants.pop(tenant_id, None)
             for tenant_id, record in fresh["tenants"].items():
                 if tenant_id not in self.tenants:
@@ -443,10 +461,12 @@ class Hub:
 
         A pending code stops pairing on the spot; a used one suspends the
         tenant it produced — its token stops authenticating, its connections
-        stop ticking, and its capacity slot frees, all derived from this one
-        flag. Machine pairings are untouched: revoke is a pure authorization
-        act, fully reversible with `restore`. Nothing is deleted — the
-        ledger keeps every row.
+        stop ticking, its capacity slot frees, and its RAM workspace (the
+        mirror plus the API-key keyring) is dropped, all derived from this
+        one flag. Machine pairings are untouched: revoke is a pure
+        authorization act, fully reversible with `restore`. Nothing is
+        deleted — the ledger keeps every row, and the workspace files stay
+        on disk.
         """
         with self._registry_transaction():
             entry = self.registry["invites"].get(_hash_secret(code))
@@ -459,6 +479,8 @@ class Hub:
             entry["revokedAt"] = schedule.iso(now)
             self._save()
         used_by = entry.get("usedBy")
+        if used_by and used_by in self.tenants:
+            self.tenants[used_by].release_workspace()
         who = f" — {used_by} suspended" if used_by else ""
         self.log(f"invite revoked ({entry.get('note') or 'no note'}){who}")
         was_expired = expires is not None and expires <= now

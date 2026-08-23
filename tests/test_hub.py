@@ -261,6 +261,21 @@ class LifecycleTests(HubCase):
         self.assertNotIn("suspendedAt", record)  # suspension lives on the invite only
         self.assertTrue(self.registry()["invites"][engine._hash_secret(code)]["revokedAt"])
 
+    def test_suspension_frees_the_ram_workspace_and_its_keys(self):
+        token, tenant_id = self.join("alice")
+        self.push_plan(token)
+        tenant = self.hub.tenants[tenant_id]
+        warm = tenant.warm  # materialized: the config/state mirror plus the keyring
+        self.assertIn("glm", warm.keys)
+        self.hub.revoke(self.code_of(tenant_id))
+        self.assertIsNone(tenant._warm)  # the mirror and the keys left RAM
+        self.assertTrue((self.data_dir / "tenants" / tenant_id).exists())  # files stay
+        self.hub.restore(self.code_of(tenant_id))
+        view = remote_client.fetch_state(self.url, token)
+        self.assertTrue(view["connections"]["glm"]["keyMissing"])  # keys died with the workspace
+        remote_client.push_keys(self.url, token, {"glm": "sk-test"})
+        self.assertFalse(remote_client.fetch_state(self.url, token)["connections"]["glm"]["keyMissing"])
+
     def test_restore_brings_the_token_back(self):
         token, tenant_id = self.join("alice")
         code = self.code_of(tenant_id)
@@ -457,6 +472,15 @@ class CrossProcessTests(HubCase):
         with self.assertRaises(remote_client.RemoteError) as ctx:
             remote_client.fetch_state(self.url, token)
         self.assertIn("401", str(ctx.exception))
+
+    def test_a_revoke_by_another_process_frees_the_serve_workspace(self):
+        token, tenant_id = self.join("alice")
+        self.push_plan(token)
+        tenant = self.hub.tenants[tenant_id]
+        engine.Hub(self.data_dir).revoke(self.code_of(tenant_id))
+        with self.assertRaises(remote_client.RemoteError):
+            remote_client.fetch_state(self.url, token)  # the 401 path itself refreshes the registry
+        self.assertIsNone(tenant._warm)
 
     def test_revoked_invite_stops_pairing_without_a_restart(self):
         code = engine.Hub(self.data_dir).mint_invite("alice")  # `awewarm-hub invite`

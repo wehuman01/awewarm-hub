@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.9
+
+Revoking an invite now frees the suspended tenant's RAM workspace: the config/state mirror and — the point — the API-key keyring leave memory the moment the suspension lands, whether the revoke ran inside the serve process or in a one-shot operator CLI (a running serve drops it on its next registry refresh). The workspace files stay on disk and `restore` reloads them lazily; keys return the way they do after a serve restart — the user's machine re-pushes them on its sync cycle, and slots that come due in between are held and catch up rather than fail.
+
 ## v0.5.8
 
 `--help` command listings now wrap long one-liners instead of truncating them with `...` (a local `WrapGroup`, same behavior as awewarm's), so a narrow terminal still reads every description in full. It is inlined rather than imported from awewarm on purpose — a help-rendering nicety must not move the `awewarm` engine pin.
