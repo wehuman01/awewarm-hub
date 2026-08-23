@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.0
+## v0.5.6
 
 **Breaking:** revoke/restore converge to the invite code as their single entry point, and the code becomes the only ledger of authorization. `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed) — `revoke t_...` / `restore t_...` are gone and now error with a pointer to `list invites --reveal` (the USED BY column names the tenant). The code is the lifetime name of an authorization: once used, its `usedBy → tenant` link is permanent, so tenant-addressing was always a second address for the same state transition — with a second code path, which had already drifted (the `t_` path wiped machine pairings, the `awi_` path didn't).
 

@@ -112,7 +112,7 @@ awewarm-hub self-update [--check]              # 从 PyPI 升级
 
 数据目录(`~/.awewarm-server`,或 `--data-dir`/旧 `hub config --data-dir` 设置的路径)原样沿用 —— 租户、邀请码、已持久化的数据目录设置全部继续工作。停掉旧的 serve,安装本包,启动 `awewarm-hub serve` 即可。旧写法(`awewarm serve --hub`、`awewarm hub ...`)在 awewarm 中以墓碑形式提示改用这里的对应命令。
 
-升级到 v0.6.0(破坏性变更):`revoke`/`restore` 只按邀请码寻址 —— `revoke t_...` 已删除;租户加入时用的码用 `list invites --reveal` 查。升级后首次启动会一次性迁移 `tenants.json`:租户上的挂起状态移到其邀请码的 `revokedAt`;明文码落盘之前铸造的老邀请行会连同它产出的租户一起删除(其 token 随之失效;工作区保留在磁盘上,发新码重新配对即可)。请同时升级本包并重启 serve,让两个进程说同一版台账格式。
+升级到 v0.5.6(破坏性变更):`revoke`/`restore` 只按邀请码寻址 —— `revoke t_...` 已删除;租户加入时用的码用 `list invites --reveal` 查。升级后首次启动会一次性迁移 `tenants.json`:租户上的挂起状态移到其邀请码的 `revokedAt`;明文码落盘之前铸造的老邀请行会连同它产出的租户一起删除(其 token 随之失效;工作区保留在磁盘上,发新码重新配对即可)。请同时升级本包并重启 serve,让两个进程说同一版台账格式。
 
 ## 配置
 

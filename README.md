@@ -112,7 +112,7 @@ Nothing secret is ever written to disk — API keys live in server RAM and are r
 
 The data dir (`~/.awewarm-server`, or whatever `--data-dir`/the old `hub config --data-dir` set) carries over unchanged — tenants, invites, and the persisted data-dir setting all keep working. Stop the old serve, install this package, start `awewarm-hub serve`. The old spellings (`awewarm serve --hub`, `awewarm hub ...`) die with a tombstone in awewarm naming their replacement here.
 
-Upgrading to v0.6.0 (breaking): `revoke`/`restore` now address invite codes only — `revoke t_...` is gone; find the code a tenant joined with via `list invites --reveal`. The first launch after upgrading migrates `tenants.json` once: tenant-level suspensions move onto their invite's `revokedAt`, and any invite row minted before codes were stored on disk is dropped together with the tenant it produced (its token dies; its workspace stays — re-pair with a fresh invite). Upgrade the package and restart serve together, so both processes speak registry v2.
+Upgrading to v0.5.6 (breaking): `revoke`/`restore` now address invite codes only — `revoke t_...` is gone; find the code a tenant joined with via `list invites --reveal`. The first launch after upgrading migrates `tenants.json` once: tenant-level suspensions move onto their invite's `revokedAt`, and any invite row minted before codes were stored on disk is dropped together with the tenant it produced (its token dies; its workspace stays — re-pair with a fresh invite). Upgrade the package and restart serve together, so both processes speak registry v2.
 
 ## Config
 
