@@ -1,12 +1,6 @@
 # Changelog
 
-## v0.5.7
-
-`list invites --token` shows the tenant token behind each used invite, so a user who lost theirs (reinstall, new machine) is handed back the same identity — connections, quotas, workspace — instead of re-pairing into a fresh tenant: they reconnect with `awewarm remote connect <url> --token <it>`. The flag is the old name back with honest semantics: `--token` originally *was* the code-reveal flag, renamed to `--reveal` in awewarm because it showed codes, not tokens.
-
-This changes a stable design constraint, eyes open: tenant tokens now join invite codes as the deliberate on-disk plaintext, kept in `tenants.json` for exactly this recovery (authentication still compares the token's SHA-256 hash — the auth path is untouched). The exposure widens accordingly: a data-dir reader could already spend a pending invite; now they can also act as an existing tenant (push connections, read state — never read API keys, which still live in RAM only). Docs and help text now state the rule as "invite codes and tenant tokens are the on-disk exceptions; guard the data dir". Tenants that joined before this release show `—` (the token wasn't kept) and keep the fresh-invite path; `--json` follows `--token` the way it follows `--reveal`.
-
-**Breaking:** `invite` learns batch minting and adopts aweshare's flag spellings: `--name` (was `--note`), `--count N` (1–100 codes in one registry transaction, sharing name, expiry, and machine cap), and `--expires-in 90s|30m|12h|7d` (was `--expires-hours`; same 48 h default, now also accepting sub-hour spellings). The old flags are gone — spellings match `aweshare hub invite create` across the two products.
+## v0.5.8
 
 `--help` command listings now wrap long one-liners instead of truncating them with `...` (a local `WrapGroup`, same behavior as awewarm's), so a narrow terminal still reads every description in full. It is inlined rather than imported from awewarm on purpose — a help-rendering nicety must not move the `awewarm` engine pin.
 
@@ -15,6 +9,14 @@ This changes a stable design constraint, eyes open: tenant tokens now join invit
 The capacity caps are now settings, not launch arguments: `awewarm-hub config --max-tenants 20 --max-conns-per-tenant 10 --max-machines 2` retunes them at any time and a running serve adopts the new values without a restart (caps live in the registry's serve record, which every tenant action and each scheduling tick re-read; serve flags still stamp them at launch, and unset flags resolve to the saved values). `config` alone shows what is in effect and where it comes from, `--reset` clears the caps back to the 10/5/1 defaults, and with cap flags `--data-dir` becomes a one-shot registry selector like on every other command (alone it still persists the machine's default data dir). `status` shows pre-set caps even before a first launch, and the "hub is full" error now names the config knob.
 
 `rename awi_... <name>` relabels an invite's note after minting — the label `list invites` and `list users` show; a used invite's tenant carries a copy set at join time and follows, so both listings stay in agreement. Non-destructive: code, status, caps, and expiry untouched.
+
+## v0.5.7
+
+`list invites --token` shows the tenant token behind each used invite, so a user who lost theirs (reinstall, new machine) is handed back the same identity — connections, quotas, workspace — instead of re-pairing into a fresh tenant: they reconnect with `awewarm remote connect <url> --token <it>`. The flag is the old name back with honest semantics: `--token` originally *was* the code-reveal flag, renamed to `--reveal` in awewarm because it showed codes, not tokens.
+
+This changes a stable design constraint, eyes open: tenant tokens now join invite codes as the deliberate on-disk plaintext, kept in `tenants.json` for exactly this recovery (authentication still compares the token's SHA-256 hash — the auth path is untouched). The exposure widens accordingly: a data-dir reader could already spend a pending invite; now they can also act as an existing tenant (push connections, read state — never read API keys, which still live in RAM only). Docs and help text now state the rule as "invite codes and tenant tokens are the on-disk exceptions; guard the data dir". Tenants that joined before this release show `—` (the token wasn't kept) and keep the fresh-invite path; `--json` follows `--token` the way it follows `--reveal`.
+
+**Breaking:** `invite` learns batch minting and adopts aweshare's flag spellings: `--name` (was `--note`), `--count N` (1–100 codes in one registry transaction, sharing name, expiry, and machine cap), and `--expires-in 90s|30m|12h|7d` (was `--expires-hours`; same 48 h default, now also accepting sub-hour spellings). The old flags are gone — spellings match `aweshare hub invite create` across the two products.
 
 ## v0.5.6
 
