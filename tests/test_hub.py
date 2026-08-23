@@ -72,6 +72,11 @@ class HubCase(unittest.TestCase):
         joined = remote_client.join(self.url, invite)
         return joined["token"], joined["tenantId"]
 
+    def code_of(self, tenant_id):
+        """The invite code a tenant joined with — the only handle for
+        revoking its authorization."""
+        return (self.hub._invite_of(tenant_id) or {}).get("code")
+
     def push_plan(self, token, conn_id="glm", fixed_at=("03:00",)):
         conn = plan_connection(fixed_at=fixed_at, days="every-day")
         return remote_client.push_connection(self.url, token, conn_id, conn, "sk-test", TZ)
@@ -115,7 +120,7 @@ class PairingTests(HubCase):
 
     def test_revoked_invite_no_longer_pairs(self):
         invite = self.hub.mint_invite("alice")
-        self.hub.revoke_invite(invite)
+        self.hub.revoke(invite)
         digest = engine._hash_secret(invite)
         self.assertTrue(self.registry()["invites"][digest].get("revokedAt"))  # kept, flagged
         with self.assertRaises(remote_client.RemoteError) as ctx:
@@ -124,32 +129,33 @@ class PairingTests(HubCase):
 
     def test_restored_invite_pairs_again(self):
         invite = self.hub.mint_invite("alice")
-        self.hub.revoke_invite(invite)
-        self.hub.restore_invite(invite)
+        self.hub.revoke(invite)
+        self.hub.restore(invite)
         joined = remote_client.join(self.url, invite)
         self.assertTrue(joined["token"].startswith("awt_"))
 
-    def test_revoke_invite_flags_an_expired_entry(self):
+    def test_revoke_flags_an_expired_entry(self):
         invite = self.hub.mint_invite("alice")
         digest = engine._hash_secret(invite)
         self.hub.registry["invites"][digest]["expiresAt"] = schedule.iso(
             datetime.now().astimezone()
         )
-        result = self.hub.revoke_invite(invite)
+        result = self.hub.revoke(invite)
         self.assertEqual(result["status"], "expired")
         self.assertTrue(self.registry()["invites"][digest].get("revokedAt"))
 
-    def test_revoke_invite_suspends_the_tenant_it_produced(self):
+    def test_revoke_suspends_the_tenant_it_produced(self):
         invite = self.hub.mint_invite("alice")
         joined = remote_client.join(self.url, invite)
-        result = self.hub.revoke_invite(invite)
+        result = self.hub.revoke(invite)
         self.assertEqual(result["status"], "used")
         self.assertEqual(result["tenant"], joined["tenantId"])
         with self.assertRaises(remote_client.RemoteError) as ctx:
             remote_client.fetch_state(self.url, joined["token"])
         self.assertIn("suspended", str(ctx.exception))
-        self.assertIn(engine._hash_secret(invite), self.registry()["invites"])  # the ledger row stays
-        self.hub.restore_invite(invite)  # the code is a handle for the same suspension
+        digest = engine._hash_secret(invite)
+        self.assertIn(digest, self.registry()["invites"])  # the ledger row stays
+        self.hub.restore(invite)  # the code is a handle for the same suspension
         self.assertEqual(remote_client.fetch_state(self.url, joined["token"])["connections"], {})
 
     def test_malformed_invite_is_a_400(self):
@@ -239,19 +245,23 @@ class LifecycleTests(HubCase):
     def test_revoke_suspends_the_token_and_keeps_the_workspace(self):
         token, tenant_id = self.join("alice")
         self.push_plan(token)
-        self.hub.revoke(tenant_id)
+        code = self.code_of(tenant_id)
+        self.hub.revoke(code)
         self.assertTrue((self.data_dir / "tenants" / tenant_id).exists())  # kept on disk
         with self.assertRaises(remote_client.RemoteError) as ctx:
             remote_client.fetch_state(self.url, token)
         self.assertIn("suspended", str(ctx.exception))
-        self.assertTrue(self.registry()["tenants"][tenant_id].get("suspendedAt"))
+        record = self.registry()["tenants"][tenant_id]
+        self.assertNotIn("suspendedAt", record)  # suspension lives on the invite only
+        self.assertTrue(self.registry()["invites"][engine._hash_secret(code)]["revokedAt"])
 
     def test_restore_brings_the_token_back(self):
         token, tenant_id = self.join("alice")
-        self.hub.revoke(tenant_id)
-        self.hub.restore(tenant_id)
+        code = self.code_of(tenant_id)
+        self.hub.revoke(code)
+        self.hub.restore(code)
         self.assertEqual(remote_client.fetch_state(self.url, token)["connections"], {})
-        self.assertFalse(self.registry()["tenants"][tenant_id].get("suspendedAt"))
+        self.assertFalse(self.registry()["invites"][engine._hash_secret(code)].get("revokedAt"))
 
     def test_release_keeps_the_pairing(self):
         token, _ = self.join("alice")
@@ -269,8 +279,10 @@ class LifecycleTests(HubCase):
 
 
 class MachineTests(HubCase):
-    """One token, N machines: `serve --max-machines` (default 1) — the cap
-    rides on a per-install machine id sent with every authed request."""
+    """One token, N machines. The cap is a property of the authorization:
+    stamped onto the invite at minting (`invite --machines`), defaulting to
+    the serve flag; the cap rides on a per-install machine id sent with
+    every authed request."""
 
     def test_a_token_serves_one_machine_by_default(self):
         token, _ = self.join("alice")
@@ -312,14 +324,43 @@ class MachineTests(HubCase):
             remote_client.fetch_state(self.url, token, machine="awm_phone")
         self.assertIn("limit 2", str(ctx.exception))
 
-    def test_revoke_and_restore_clears_the_machines(self):
+    def test_revoke_and_restore_keep_the_machines(self):
         token, tenant_id = self.join("alice")
-        remote_client.fetch_state(self.url, token, machine="awm_old")
-        self.hub.revoke(tenant_id)
-        self.hub.restore(tenant_id)
-        # a reinstalled machine (fresh id) can now take the freed slot
-        remote_client.fetch_state(self.url, token, machine="awm_new")
-        self.assertEqual(self.registry()["tenants"][tenant_id]["machines"], ["awm_new"])
+        code = self.code_of(tenant_id)
+        remote_client.fetch_state(self.url, token, machine="awm_desktop")
+        self.hub.revoke(code)
+        self.hub.restore(code)
+        # revoke is a pure authorization act — the pairing survives it intact
+        remote_client.fetch_state(self.url, token, machine="awm_desktop")
+        self.assertEqual(self.registry()["tenants"][tenant_id]["machines"], ["awm_desktop"])
+
+    def test_an_invite_can_carry_a_higher_machine_cap(self):
+        code = self.hub.mint_invite("alice", machines=3)
+        joined = remote_client.join(self.url, code)
+        for machine in ("awm_desktop", "awm_laptop", "awm_phone"):
+            remote_client.fetch_state(self.url, joined["token"], machine=machine)
+        with self.assertRaises(remote_client.RemoteError) as ctx:
+            remote_client.fetch_state(self.url, joined["token"], machine="awm_tablet")
+        self.assertIn("limit 3", str(ctx.exception))
+
+    def test_a_per_invite_cap_beats_the_global_one(self):
+        self.make_hub(max_machines=2)
+        raised = self.hub.mint_invite("alice", machines=1)  # tighter than the global cap
+        joined = remote_client.join(self.url, raised)
+        remote_client.fetch_state(self.url, joined["token"], machine="awm_desktop")
+        with self.assertRaises(remote_client.RemoteError) as ctx:
+            remote_client.fetch_state(self.url, joined["token"], machine="awm_laptop")
+        self.assertIn("limit 1", str(ctx.exception))
+
+    def test_an_invite_without_a_stamped_cap_follows_the_global_one(self):
+        code = self.hub.mint_invite("alice")
+        digest = engine._hash_secret(code)
+        self.hub.registry["invites"][digest].pop("machines")  # minted before caps moved onto codes
+        self.hub._save()
+        self.make_hub(max_machines=2)  # raise the global cap afterwards
+        joined = remote_client.join(self.url, code)
+        remote_client.fetch_state(self.url, joined["token"], machine="awm_desktop")
+        remote_client.fetch_state(self.url, joined["token"], machine="awm_laptop")
 
 
 class CrossProcessTests(HubCase):
@@ -335,14 +376,14 @@ class CrossProcessTests(HubCase):
 
     def test_revoked_token_stops_working_without_a_restart(self):
         token, tenant_id = self.join("alice")
-        engine.Hub(self.data_dir).revoke(tenant_id)  # `awewarm-hub revoke` in another process
+        engine.Hub(self.data_dir).revoke(self.code_of(tenant_id))  # `awewarm-hub revoke` in another process
         with self.assertRaises(remote_client.RemoteError) as ctx:
             remote_client.fetch_state(self.url, token)
         self.assertIn("401", str(ctx.exception))
 
     def test_revoked_invite_stops_pairing_without_a_restart(self):
         code = engine.Hub(self.data_dir).mint_invite("alice")  # `awewarm-hub invite`
-        engine.Hub(self.data_dir).revoke_invite(code)  # `awewarm-hub revoke awi_...`
+        engine.Hub(self.data_dir).revoke(code)  # `awewarm-hub revoke awi_...`
         with self.assertRaises(remote_client.RemoteError) as ctx:
             remote_client.join(self.url, code)  # against the long-lived serve
         self.assertIn("403", str(ctx.exception))
@@ -350,12 +391,13 @@ class CrossProcessTests(HubCase):
     def test_stale_usage_write_cannot_lift_a_suspension(self):
         token, tenant_id = self.join("alice")
         stale_tenant = self.hub.tenants[tenant_id]
-        engine.Hub(self.data_dir).revoke(tenant_id)
+        code = self.code_of(tenant_id)
+        engine.Hub(self.data_dir).revoke(code)
 
         self.hub._bump_usage(stale_tenant, 1)
 
-        record = engine.Hub(self.data_dir).registry["tenants"][tenant_id]
-        self.assertTrue(record.get("suspendedAt"))  # the bump must not clear it
+        invite = engine.Hub(self.data_dir).registry["invites"][engine._hash_secret(code)]
+        self.assertTrue(invite.get("revokedAt"))  # the bump must not clear it
         with self.assertRaises(ApiError) as ctx:
             self.hub.auth(token)
         self.assertEqual(ctx.exception.status, 401)
@@ -365,7 +407,7 @@ class CrossProcessTests(HubCase):
         token, tenant_id = self.join("alice")
         self.push_plan(token)
         workspace = self.data_dir / "tenants" / tenant_id
-        engine.Hub(self.data_dir).revoke(tenant_id)
+        engine.Hub(self.data_dir).revoke(self.code_of(tenant_id))
 
         result = self.hub.tick(now_fn=lambda conn: at("03:00", seconds=30))
 
@@ -375,11 +417,12 @@ class CrossProcessTests(HubCase):
     def test_suspension_frees_a_slot_and_restore_retakes_it(self):
         self.make_hub(max_tenants=1)
         token, tenant_id = self.join("alice")
-        engine.Hub(self.data_dir).revoke(tenant_id)  # frees the only slot
+        code = self.code_of(tenant_id)
+        engine.Hub(self.data_dir).revoke(code)  # frees the only slot
         bob_token, _ = self.join("bob")  # joins while alice is suspended
         self.assertTrue(bob_token.startswith("awt_"))
         with self.assertRaises(ApiError) as ctx:
-            self.hub.restore(tenant_id)  # no room left for alice
+            self.hub.restore(code)  # no room left for alice
         self.assertIn("full", str(ctx.exception))
 
     def test_reload_uses_disk_record_but_keeps_runtime_tenant_state(self):
@@ -394,6 +437,83 @@ class CrossProcessTests(HubCase):
         self.assertEqual(self.hub.registry["tenants"][tenant_id]["usage"]["total"], 0)
         self.assertIs(self.hub.tenants[tenant_id], tenant)
         self.assertEqual(list(tenant.requests), [123])
+
+
+class MigrationTests(unittest.TestCase):
+    """v1→v2, once, at load: the invite becomes the only authorization
+    ledger. Crafted by hand-editing tenants.json back into v1 shapes."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data_dir = Path(tmp.name) / "hub"
+        self.path = self.data_dir / "tenants.json"
+        self.hub = engine.Hub(self.data_dir)
+
+    def rewind(self):
+        """Freeze the on-disk registry into a v1 shape for one invite."""
+        data = json.loads(self.path.read_text())
+        data["version"] = 1
+        self.path.write_text(json.dumps(data))
+
+    def test_suspension_moves_from_the_tenant_to_its_invite(self):
+        code = self.hub.mint_invite("alice")
+        self.hub.join(code)
+        self.hub.registry["tenants"]  # loaded
+        tenant_id = next(iter(self.hub.registry["tenants"]))
+        digest = engine._hash_secret(code)
+        self.hub.registry["tenants"][tenant_id]["suspendedAt"] = "2026-08-01T10:00:00+08:00"
+        self.hub.registry["invites"][digest].pop("revokedAt", None)
+        self.hub._save()
+        self.rewind()
+
+        migrated = engine.Hub(self.data_dir)
+        record = migrated.registry["tenants"][tenant_id]
+        self.assertNotIn("suspendedAt", record)
+        self.assertEqual(
+            migrated.registry["invites"][digest]["revokedAt"], "2026-08-01T10:00:00+08:00"
+        )
+        self.assertTrue(migrated._suspension_of(tenant_id))
+        self.assertEqual(migrated.registry["version"], 2)
+
+    def test_a_codeless_invite_row_takes_its_tenant_with_it(self):
+        code = self.hub.mint_invite("alice")
+        self.hub.join(code)
+        tenant_id = next(iter(self.hub.registry["tenants"]))
+        workspace = self.data_dir / "tenants" / tenant_id
+        self.hub.tenants[tenant_id].warm  # materialize the workspace directory
+        digest = engine._hash_secret(code)
+        self.hub.registry["invites"][digest].pop("code")  # pre-"codes on disk" vintage
+        self.hub._save()
+        self.rewind()
+
+        migrated = engine.Hub(self.data_dir)
+        self.assertNotIn(digest, migrated.registry["invites"])  # unaddressable → gone
+        self.assertNotIn(tenant_id, migrated.registry["tenants"])  # its token died with it
+        self.assertTrue(workspace.exists())  # files stay on disk
+
+    def test_a_codeless_pending_invite_row_just_goes(self):
+        code = self.hub.mint_invite("alice")
+        digest = engine._hash_secret(code)
+        self.hub.registry["invites"][digest].pop("code")
+        self.hub._save()
+        self.rewind()
+
+        migrated = engine.Hub(self.data_dir)
+        self.assertEqual(migrated.registry["invites"], {})
+        self.assertEqual(migrated.registry["tenants"], {})
+
+    def test_migration_runs_once_and_leaves_v2_data_alone(self):
+        code = self.hub.mint_invite("alice")
+        self.hub.join(code)
+        tenant_id = next(iter(self.hub.registry["tenants"]))
+        mtime = self.path.stat().st_mtime_ns
+
+        again = engine.Hub(self.data_dir)  # v2 on disk — no rewrite
+
+        self.assertEqual(again.registry["version"], 2)
+        self.assertEqual(self.path.stat().st_mtime_ns, mtime)
+        self.assertIn(tenant_id, again.registry["tenants"])
 
 
 class UsageTests(HubCase):
@@ -588,25 +708,38 @@ class HubCliTests(IsolatedTestCase):
         self.assertIn("reachable", result.output)
         self.assertIn(f"v{awewarm_hub.__version__}, hub", result.output)
 
-    def test_revoke_suspends_the_tenant(self):
+    def test_revoke_by_tenant_id_is_refused_with_guidance(self):
         engine_hub = engine.Hub(self.data_dir)
         joined = engine_hub.join(engine_hub.mint_invite("alice"))
         result = invoke(["revoke", joined["tenantId"]] + self.dir_opt, input="y\n")
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("no longer addressable", result.output)
+        self.assertIn("hub list invites --reveal", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertNotIn("suspendedAt", registry["tenants"][joined["tenantId"]])  # untouched
+
+    def test_revoke_by_code_suspends_the_tenant(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        joined = engine_hub.join(code)
+        result = invoke(["revoke", code] + self.dir_opt, input="y\n")
         self.assertEqual(result.exit_code, 0)
         self.assertIn("suspended", result.output)
+        self.assertIn(joined["tenantId"], result.output)
         self.assertIn("awewarm-hub restore", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
         record = registry["tenants"][joined["tenantId"]]
-        self.assertTrue(record.get("suspendedAt"))  # kept, flagged — nothing deleted
+        self.assertNotIn("suspendedAt", record)  # nothing deleted, nothing mirrored
+        self.assertTrue(registry["invites"][engine._hash_secret(code)]["revokedAt"])
 
     def test_revoke_reports_a_busy_registry_without_a_traceback(self):
         engine_hub = engine.Hub(self.data_dir)
-        joined = engine_hub.join(engine_hub.mint_invite("alice"))
+        code = engine_hub.mint_invite("alice")
         busy = ApiError(503, "hub registry is busy — retry this request")
         with mock.patch.object(engine.Hub, "revoke", side_effect=busy):
-            result = invoke(["revoke", joined["tenantId"]] + self.dir_opt, input="y\n")
+            result = invoke(["revoke", code] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn(f"could not revoke {joined['tenantId']}", result.output)
+        self.assertIn("could not revoke the invite", result.output)
         self.assertIn("hub registry is busy", result.output)
         self.assertNotIn("Traceback", result.output)
 
@@ -621,7 +754,7 @@ class HubCliTests(IsolatedTestCase):
         with self.assertRaises(ApiError):
             engine_hub.join(code)
 
-    def test_revoke_invite_aborts_without_confirmation(self):
+    def test_revoke_aborts_without_confirmation(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
         result = invoke(["revoke", code] + self.dir_opt, input="n\n")
@@ -629,39 +762,36 @@ class HubCliTests(IsolatedTestCase):
         self.assertIn("aborted", result.output)
         self.assertTrue(engine_hub.join(code)["token"].startswith("awt_"))
 
-    def test_revoke_used_invite_suspends_its_tenant(self):
-        engine_hub = engine.Hub(self.data_dir)
-        code = engine_hub.mint_invite("alice")
-        joined = engine_hub.join(code)
-        result = invoke(["revoke", code] + self.dir_opt, input="y\n")
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("suspended", result.output)
-        self.assertIn(joined["tenantId"], result.output)
-        self.assertIn("awewarm-hub restore", result.output)
-        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
-        self.assertIn(engine._hash_secret(code), registry["invites"])  # the ledger row stays
-        self.assertTrue(registry["tenants"][joined["tenantId"]].get("suspendedAt"))
-
-    def test_restore_revives_a_suspended_tenant(self):
-        engine_hub = engine.Hub(self.data_dir)
-        joined = engine_hub.join(engine_hub.mint_invite("alice"))
-        engine_hub.revoke(joined["tenantId"])
-        result = invoke(["restore", joined["tenantId"]] + self.dir_opt)
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("restored", result.output)
-        self.assertFalse(engine.Hub(self.data_dir).registry["tenants"][joined["tenantId"]].get("suspendedAt"))
-
-    def test_restore_of_an_active_tenant_is_refused(self):
+    def test_restore_by_tenant_id_is_refused_with_guidance(self):
         engine_hub = engine.Hub(self.data_dir)
         joined = engine_hub.join(engine_hub.mint_invite("alice"))
         result = invoke(["restore", joined["tenantId"]] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("not suspended", result.output)
+        self.assertIn("no longer addressable", result.output)
+        self.assertIn("hub list invites --reveal", result.output)
+
+    def test_restore_revives_a_suspended_tenant(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        joined = engine_hub.join(code)
+        engine_hub.revoke(code)
+        result = invoke(["restore", code] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("restored", result.output)
+        self.assertIn(joined["tenantId"], result.output)
+        self.assertFalse(engine.Hub(self.data_dir).registry["invites"][engine._hash_secret(code)].get("revokedAt"))
+
+    def test_restore_of_an_unrevoked_invite_is_refused(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        result = invoke(["restore", code] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("not revoked", result.output)
 
     def test_restore_revives_a_revoked_invite(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        engine_hub.revoke_invite(code)
+        engine_hub.revoke(code)
         result = invoke(["restore", code] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn("pairs again", result.output)
@@ -669,8 +799,9 @@ class HubCliTests(IsolatedTestCase):
 
     def test_list_users_marks_suspended_tenants(self):
         engine_hub = engine.Hub(self.data_dir)
-        joined = engine_hub.join(engine_hub.mint_invite("alice"))
-        engine_hub.revoke(joined["tenantId"])
+        code = engine_hub.mint_invite("alice")
+        engine_hub.join(code)
+        engine_hub.revoke(code)
         result = invoke(["list", "users"] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn("suspended", result.output)
@@ -678,7 +809,7 @@ class HubCliTests(IsolatedTestCase):
     def test_invites_shows_a_revoked_code(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        engine_hub.revoke_invite(code)
+        engine_hub.revoke(code)
         result = invoke(["list", "invites"] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         self.assertIn("revoked", result.output)
@@ -686,26 +817,17 @@ class HubCliTests(IsolatedTestCase):
     def test_invites_shows_a_suspended_tenant_behind_a_used_code(self):
         engine_hub = engine.Hub(self.data_dir)
         code = engine_hub.mint_invite("alice")
-        joined = engine_hub.join(code)
-        engine_hub.revoke(joined["tenantId"])  # suspending the tenant must surface on its code's row
+        engine_hub.join(code)
+        engine_hub.revoke(code)  # the suspension surfaces on the code's row
         result = invoke(["list", "invites"] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
-        self.assertIn("suspended", result.output)
+        self.assertIn("revoked", result.output)
 
-    def test_revoke_invite_reports_an_unknown_code(self):
+    def test_revoke_reports_an_unknown_code(self):
         result = invoke(["revoke", "awi_" + "x" * 20] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no such invite", result.output)
         self.assertIn("hub list invites", result.output)
-
-    def test_revoke_invite_reports_a_busy_registry_without_a_traceback(self):
-        busy = ApiError(503, "hub registry is busy — retry this request")
-        with mock.patch.object(engine.Hub, "revoke_invite", side_effect=busy):
-            result = invoke(["revoke", "awi_" + "x" * 20] + self.dir_opt, input="y\n")
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("could not revoke the invite", result.output)
-        self.assertIn("hub registry is busy", result.output)
-        self.assertNotIn("Traceback", result.output)
 
     def test_list_with_no_tenants_still_shows_pending_invites(self):
         engine_hub = engine.Hub(self.data_dir)
@@ -771,7 +893,38 @@ class HubCliTests(IsolatedTestCase):
     def test_revoke_unknown_tenant_lists_known_ones(self):
         result = invoke(["revoke", "t_nope"] + self.dir_opt, input="y\n")
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("no such tenant", result.output)
+        self.assertIn("no longer addressable", result.output)
+
+    def test_invite_stamps_a_machine_cap(self):
+        result = invoke(["invite"] + self.dir_opt + ["--note", "alice", "--machines", "3"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("3 machine(s)", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        stamped = next(iter(registry["invites"].values()))
+        self.assertEqual(stamped["machines"], 3)
+
+    def test_invite_defaults_the_cap_to_the_serve_flag(self):
+        engine.Hub(self.data_dir, max_machines=2).record_launch("127.0.0.1", 1)
+        invoke(["invite"] + self.dir_opt)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        stamped = next(iter(registry["invites"].values()))
+        self.assertEqual(stamped["machines"], 2)
+
+    def test_invite_rejects_a_non_positive_machine_cap(self):
+        result = invoke(["invite"] + self.dir_opt + ["--machines", "0"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("--machines must be greater than 0", result.output)
+
+    def test_invites_lists_each_codes_machine_cap(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice", machines=3)
+        plain = engine_hub.mint_invite("bob")
+        result = invoke(["list", "invites"] + self.dir_opt + ["--reveal"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("MACHINES", result.output)
+        self.assertIn("3", result.output)
+        plain_row = next(line for line in result.output.splitlines() if plain in line)
+        self.assertIn(str(engine_hub.max_machines), plain_row)  # the default was stamped too
 
     def test_config_persists_the_data_dir_in_awewarm_config(self):
         # the setting lives in awewarm's config.json — the same file the
@@ -851,9 +1004,10 @@ class ConnectHubTests(IsolatedTestCase):
         self.assertEqual(len(pending), 1)
 
     def test_connect_recovers_from_a_revoked_stored_token(self):
-        joined = remote_client.join(self.url, self.hub.mint_invite("alice"))
+        code = self.hub.mint_invite("alice")
+        joined = remote_client.join(self.url, code)
         remote_client.store_token(joined["token"])
-        self.hub.revoke(joined["tenantId"])
+        self.hub.revoke(code)
         fresh = self.hub.mint_invite("alice")
         result = invoke_client(["remote", "connect", self.url, "--invite", fresh])
         self.assertEqual(result.exit_code, 0)

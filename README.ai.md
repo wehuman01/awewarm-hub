@@ -196,11 +196,11 @@ awewarm-hub self-update --check    # show current/latest version
 Operator actions (run on user request):
 
 ```bash
-awewarm-hub invite [--note <who>] [--expires-hours N]   # mint a one-time code
-awewarm-hub revoke <t_...>|<awi_...>                    # suspend a tenant / kill an invite (reversible)
-awewarm-hub restore <t_...>|<awi_...>                   # undo a revoke
-awewarm-hub config --data-dir /data [--unset]           # persist the default data dir
-awewarm-hub self-update                                 # upgrade awewarm-hub
+awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]   # mint a one-time code
+awewarm-hub revoke <awi_...>                    # kill an invite: pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub restore <awi_...>                   # undo a revoke
+awewarm-hub config --data-dir /data [--unset]   # persist the default data dir
+awewarm-hub self-update                         # upgrade awewarm-hub
 ```
 
 User-only command (resident process — the user runs it in their own terminal or systemd):
@@ -213,7 +213,7 @@ awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tena
 
 - Never run `serve` from the agent, and never background it — it is a resident process the operator owns.
 - Invite codes are one-time secrets. Never log them beyond what the command prints for handoff, and remind the user to send them over a private channel.
-- Revoke before you delete nothing: revocation is suspension, not deletion, and `restore` undoes it. Prefer `revoke` for anything reversible.
+- Revoke before you delete nothing: revocation is suspension, not deletion, and `restore` undoes it. Both address invite codes (`awi_...`) — a tenant's code is the USED BY match in `list invites --reveal`. Prefer `revoke` for anything reversible.
 - Users' API keys pass through the hub's RAM. State the trust rule plainly before the user invites strangers.
 - Restarting `serve` is safe (keys re-push automatically); still, coordinate it with the user instead of surprising them.
 - If any command fails, report the exact command and error message. Do not silently retry.

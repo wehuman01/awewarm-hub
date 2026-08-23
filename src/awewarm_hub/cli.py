@@ -65,7 +65,7 @@ def _resolve_server_data_dir(flag):
 @click.option("--port", default=8790, show_default=True, type=int, help="Port to listen on (0 picks a free one).")
 @click.option("--max-tenants", "max_tenants", default=10, show_default=True, type=int, help="Cap on active tenants (suspended ones free their slot).")
 @click.option("--max-conns-per-tenant", "max_conns_per_tenant", default=5, show_default=True, type=int, help="Delegated connections each tenant may keep.")
-@click.option("--max-machines", "max_machines", default=1, show_default=True, type=int, help="Machines each token may serve from (revoke + restore clears them).")
+@click.option("--max-machines", "max_machines", default=1, show_default=True, type=int, help="Default machine cap stamped into each new invite (override per code: invite --machines).")
 @click.option("--tick-seconds", default=60, show_default=True, type=int, help="Seconds between scheduling passes.")
 def serve_command(data_dir, bind, port, max_tenants, max_conns_per_tenant, max_machines, tick_seconds):
     """Run the hub server: many users, one-time invites to pair.
@@ -163,7 +163,7 @@ def status_command(data_dir, show_details):
     else:
         click.echo(f"  tenants: {active} active (caps unknown — recorded when serve launches)")
     if suspended:
-        click.echo(f"             {suspended} suspended (slot free; restore: awewarm-hub restore <tenant>)")
+        click.echo(f"             {suspended} suspended (slot free; restore their invite: awewarm-hub restore <awi_...>)")
     conn_cap = record.get("maxConnsPerTenant")
     click.echo(
         f"  connections: {total_conns} delegated"
@@ -173,7 +173,7 @@ def status_command(data_dir, show_details):
     paired = sum(row["machines"] for row in rows if not row["suspended"])
     click.echo(
         f"  machines: {paired} paired"
-        + (f" (max {machine_cap} per token; revoke + restore clears)" if machine_cap else " (cap unknown)")
+        + (f" (default {machine_cap} per invite; set per code: awewarm-hub invite --machines)" if machine_cap else " (cap unknown)")
     )
     invites_line = ", ".join(f"{invite_counts[k]} {k}" for k in ("pending", "used", "expired", "revoked") if invite_counts.get(k))
     click.echo(f"  invites: {invites_line or 'none minted'} (mint: awewarm-hub invite)")
@@ -233,16 +233,20 @@ def status_command(data_dir, show_details):
 @click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
 @click.option("--note", default=None, help="Who this invite is for (shown in list users).")
 @click.option("--expires-hours", "expires_hours", type=int, default=48, show_default=True, help="How long the invite stays usable.")
-def invite_command(data_dir, note, expires_hours):
+@click.option("--machines", "machines", type=int, default=None, help="Machines this invite's token may serve from (default: the serve --max-machines value).")
+def invite_command(data_dir, note, expires_hours, machines):
     """Mint a one-time pairing invite (recover later with: list invites --reveal)."""
     if expires_hours <= 0:
         die("--expires-hours must be greater than 0")
+    if machines is not None and machines <= 0:
+        die("--machines must be greater than 0")
     engine = Hub(_resolve_server_data_dir(data_dir))
     try:
-        code = engine.mint_invite(note, expires_hours)
+        code = engine.mint_invite(note, expires_hours, machines=machines)
     except ApiError as exc:  # registry busy (serve mid-update) or the save failed
         die(f"could not mint the invite:\n{exc}")
-    click.echo(f"✓ Invite minted{f' for {note}' if note else ''} — one use, expires in {expires_hours} h")
+    cap = machines if machines is not None else engine.max_machines
+    click.echo(f"✓ Invite minted{f' for {note}' if note else ''} — one use, expires in {expires_hours} h, {cap} machine(s)")
     click.echo(f"  {code}")
     click.echo("  The user runs: awewarm remote connect <hub-url> --invite " + code)
     click.echo("  Lost it? List every minted code with: awewarm-hub list invites --reveal")
@@ -353,30 +357,54 @@ def list_invites_command(data_dir, show_codes, as_json):
             row["note"] or "—",
             (row["code"] or "—") if show_codes else _mask_invite(row["code"]),
             row["status"],
+            str(row["machines"]) if row["machines"] else "global",
             expires.strftime("%m-%d %H:%M") if expires else "—",
             row["usedBy"] or "—",
             used.strftime("%m-%d %H:%M") if used else "—",
             created.strftime("%m-%d %H:%M") if created else "—",
         ])
-    _print_table(["NOTE", "CODE", "STATUS", "EXPIRES", "USED BY", "USED AT", "MINTED"], table_rows)
+    _print_table(["NOTE", "CODE", "STATUS", "MACHINES", "EXPIRES", "USED BY", "USED AT", "MINTED"], table_rows)
     if not show_codes:
         click.echo("codes are masked — pass --reveal to show them (a pending code still pairs)")
     elif any(row["code"] is None for row in rows):
         click.echo("codes shown as — were minted before codes were kept on disk; mint a fresh invite for those")
+    if any(row["machines"] is None for row in rows):
+        click.echo("MACHINES 'global' = minted before per-invite caps; follows the live serve --max-machines")
 
 
-def _revoke_invite(engine, code):
-    """`revoke awi_...`: the code dies now instead of at its expiry.
+def _require_code_target(target):
+    """The invite code is the only handle for revoke/restore — tenants are
+    not addressable directly anymore."""
+    if target.startswith("t_"):
+        die(
+            "tenants are no longer addressable directly — operate on their invite instead\n"
+            "  find it with: awewarm-hub list invites --reveal (the USED BY column names the tenant)"
+        )
 
-    A used code additionally suspends the tenant it produced."""
-    if not click.confirm(f"Revoke invite {code}? It stops pairing immediately.", default=False):
+
+@cli.command("revoke")
+@click.argument("code")
+@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
+def revoke_command(code, data_dir):
+    """Kill an invite (awi_...): a pending code stops pairing, a used one suspends its tenant. Reversible."""
+    _require_code_target(code)
+    engine = Hub(_resolve_server_data_dir(data_dir))
+    known = {row["code"]: row for row in engine.list_invites() if row["code"]}
+    row = known.get(code)
+    if row is None:
+        die(f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
+    note = f" for {row['note']}" if row["note"] else ""
+    if row["usedBy"]:
+        prompt = f"Revoke invite{note}? Tenant {row['usedBy']} stops working immediately."
+    else:
+        prompt = f"Revoke invite{note}? It stops pairing immediately."
+    if not click.confirm(prompt, default=False):
         click.echo("aborted — nothing revoked")
         return
     try:
-        result = engine.revoke_invite(code)
+        result = engine.revoke(code)
     except ApiError as exc:  # registry busy, unknown, or already revoked
         die(f"could not revoke the invite:\n{exc}")
-    note = f" for {result['note']}" if result["note"] else ""
     status = result["status"]
     if status == "used":
         click.echo(f"✓ invite revoked{note} — tenant {result['tenant']} suspended, its token no longer works")
@@ -387,53 +415,22 @@ def _revoke_invite(engine, code):
     click.echo(f"  undo: awewarm-hub restore {code}")
 
 
-@cli.command("revoke")
-@click.argument("tenant")
-@click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-def revoke_command(tenant, data_dir):
-    """Suspend a tenant (t_...): token dead, connections kept, reversible. Or kill an invite (awi_...)."""
-    engine = Hub(_resolve_server_data_dir(data_dir))
-    if tenant.startswith("awi_"):
-        _revoke_invite(engine, tenant)
-        return
-    known = {row["tenant"]: row for row in engine.summarize()}
-    if tenant not in known:
-        die(f"no such tenant: {tenant}\nknown tenants: {', '.join(sorted(known)) or 'none'}")
-    row = known[tenant]
-    label = f" ({row['note']})" if row["note"] else ""
-    conns = ", ".join(entry["id"] for entry in row["connections"]) or "no connections"
-    if row["suspended"]:
-        die(f"{tenant}{label} is already suspended\nundo it with: awewarm-hub restore {tenant}")
-    if not click.confirm(f"Revoke {tenant}{label}? Its token stops working and these stop being ticked: {conns}", default=False):
-        click.echo("aborted — nothing revoked")
-        return
-    try:
-        engine.revoke(tenant)
-    except ApiError as exc:  # registry busy (serve mid-update) or suspended in another process
-        die(f"could not revoke {tenant}:\n{exc}")
-    click.echo(f"✓ {tenant} suspended — its token no longer works; connections and state are kept on disk")
-    click.echo(f"  undo: awewarm-hub restore {tenant}")
-
-
 @cli.command("restore")
-@click.argument("target")
+@click.argument("code")
 @click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-def restore_command(target, data_dir):
-    """Undo a revoke: a suspended tenant's (t_...) token works again, a revoked invite (awi_...) pairs again."""
+def restore_command(code, data_dir):
+    """Undo a revoke: a pending invite (awi_...) pairs again, a used one brings its tenant back."""
+    _require_code_target(code)
     engine = Hub(_resolve_server_data_dir(data_dir))
     try:
-        if target.startswith("awi_"):
-            result = engine.restore_invite(target)
-            if result["tenant"]:
-                click.echo(f"✓ invite restored — tenant {result['tenant']} is back (capacity permitting)")
-            else:
-                click.echo("✓ invite restored — the code pairs again")
-                click.echo("  it still obeys its original expiry; a fresh one: awewarm-hub invite")
+        result = engine.restore(code)
+        if result["tenant"]:
+            click.echo(f"✓ invite restored — tenant {result['tenant']} is back (capacity permitting)")
         else:
-            engine.restore(target)
-            click.echo(f"✓ {target} restored — its token works again and its slot is re-taken")
-    except ApiError as exc:  # registry busy, unknown, not suspended, or hub full
-        die(f"could not restore {target}:\n{exc}")
+            click.echo("✓ invite restored — the code pairs again")
+            click.echo("  it still obeys its original expiry; a fresh one: awewarm-hub invite")
+    except ApiError as exc:  # registry busy, unknown, not revoked, or hub full
+        die(f"could not restore {code}:\n{exc}")
 
 
 @cli.command("self-update")

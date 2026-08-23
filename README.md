@@ -91,18 +91,18 @@ WantedBy=default.target
 awewarm-hub serve [--data-dir/--bind/--port]   # the resident hub server
                  [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]
 awewarm-hub status [--details]                 # capacity, invite counts, tenants, serve liveness
-awewarm-hub invite [--note <who>] [--expires-hours N]
+awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]
 awewarm-hub list users [--api|--reveal|--json] # tenants: health, usage, machines, joining code
-awewarm-hub list invites [--reveal|--json]     # every minted code: pending/used/revoked/expired
-awewarm-hub revoke <t_...>|<awi_...>           # suspend a tenant / kill an invite (reversible)
-awewarm-hub restore <t_...>|<awi_...>          # undo a revoke
+awewarm-hub list invites [--reveal|--json]     # every minted code: pending/used/revoked/expired, its machine cap
+awewarm-hub revoke <awi_...>                   # kill an invite: pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub restore <awi_...>                  # undo a revoke
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
 awewarm-hub self-update [--check]              # upgrade from PyPI
 ```
 
 ## How It Works
 
-Each tenant gets a private workspace under `tenants/<id>/` (connections, state, RAM keyring — invisible across tenants). `tenants.json` stores SHA-256 hashes of tenant tokens, so pairings survive a restart; invite codes are kept in the clear so the operator can recover one already sent (`list invites --reveal`) — anyone who can read the data dir can use a pending invite, so guard it. Revocation is suspension, not deletion: `revoke` + `restore` round-trips a tenant or an invite; a suspended tenant frees its capacity slot. A token serves one machine by default (`--max-machines`); `revoke` + `restore` clears its paired machines. A light per-tenant rate limit (60 requests/minute) stops a looping client.
+Each tenant gets a private workspace under `tenants/<id>/` (connections, state, RAM keyring — invisible across tenants). `tenants.json` stores SHA-256 hashes of tenant tokens, so pairings survive a restart; invite codes are kept in the clear so the operator can recover one already sent (`list invites --reveal`) — anyone who can read the data dir can use a pending invite, so guard it. The invite code is the one ledger of authorization: `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed), and `restore awi_...` undoes either — machine pairings are untouched, so the round-trip is lossless. A machine cap is stamped into each invite at minting (`invite --machines N`, defaulting to `serve --max-machines`); to give an online user more machines, raise the `machines` value on their invite row in `tenants.json` (a running serve adopts the edit) or hand them a fresh code. A light per-tenant rate limit (60 requests/minute) stops a looping client.
 
 One trust rule, stated plainly: the hub fires requests with its users' API keys, so their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root); a shared VPS with strangers is not that.
 
@@ -111,6 +111,8 @@ Nothing secret is ever written to disk — API keys live in server RAM and are r
 ## Upgrading from pre-split `awewarm serve --hub`
 
 The data dir (`~/.awewarm-server`, or whatever `--data-dir`/the old `hub config --data-dir` set) carries over unchanged — tenants, invites, and the persisted data-dir setting all keep working. Stop the old serve, install this package, start `awewarm-hub serve`. The old spellings (`awewarm serve --hub`, `awewarm hub ...`) die with a tombstone in awewarm naming their replacement here.
+
+Upgrading to v0.6.0 (breaking): `revoke`/`restore` now address invite codes only — `revoke t_...` is gone; find the code a tenant joined with via `list invites --reveal`. The first launch after upgrading migrates `tenants.json` once: tenant-level suspensions move onto their invite's `revokedAt`, and any invite row minted before codes were stored on disk is dropped together with the tenant it produced (its token dies; its workspace stays — re-pair with a fresh invite). Upgrade the package and restart serve together, so both processes speak registry v2.
 
 ## Config
 

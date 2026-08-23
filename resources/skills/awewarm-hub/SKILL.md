@@ -18,7 +18,7 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 | Category | Commands |
 |---|---|
 | Read-only — run freely | `awewarm-hub status [--details]`, `awewarm-hub list users [--api\|--reveal\|--json]`, `awewarm-hub list invites [--reveal\|--json]`, `awewarm-hub config` (no flags = show resolved data dir), `awewarm-hub self-update --check` |
-| Admin — run on request | `awewarm-hub invite [--note <who>] [--expires-hours N]` (mints a one-time code), `awewarm-hub revoke <t_...\|awi_...>` (suspend tenant / kill invite — reversible), `awewarm-hub restore <t_...\|awi_...>` (undo), `awewarm-hub config --data-dir /data [--unset]`, `awewarm-hub self-update` |
+| Admin — run on request | `awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]` (mints a one-time code), `awewarm-hub revoke <awi_...>` (kill an invite: pending stops pairing, used suspends its tenant — reversible), `awewarm-hub restore <awi_...>` (undo), `awewarm-hub config --data-dir /data [--unset]`, `awewarm-hub self-update` |
 | Resident — the operator runs it in their own terminal or systemd, never from an agent session | `awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]` |
 
 ## Intent Router
@@ -28,9 +28,10 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 | "Share one server with my team", "给团队开一个共享 hub" | Operator path: `pip install awewarm-hub`, user runs `awewarm-hub serve`, then `invite` per person. Users pair with plain awewarm: `awewarm remote connect <url> --invite awi_...`. |
 | "Invite alice", "邀请一个人" | `awewarm-hub invite --note alice` — hand the printed `awi_...` code to that person promptly and privately. |
 | "Who has joined? How much are they using?", "谁加入了/用量" | `awewarm-hub status` then `awewarm-hub list users`; `--details` / `--api` for per-connection detail. |
-| "Suspend alice while she's away", "停用一个租户" | `awewarm-hub revoke t_...` — suspension, not deletion; her token stops authenticating, everything stays on disk, the capacity slot frees. |
-| "Bring her back", "恢复" | `awewarm-hub restore t_...` — re-takes a capacity slot, refuses when the hub is full. Also clears the token's paired machines. |
+| "Suspend alice while she's away", "停用一个租户" | `awewarm-hub revoke <her awi_...>` (the USED BY match in `list invites --reveal`) — suspension, not deletion; her token stops authenticating, everything stays on disk, the capacity slot frees. |
+| "Bring her back", "恢复" | `awewarm-hub restore <awi_...>` — re-takes a capacity slot, refuses when the hub is full. Machine pairings were never touched. |
 | "An invite leaked / was sent to the wrong person", "邀请码泄露" | `awewarm-hub revoke awi_...` kills a pending code on the spot; a used one suspends the tenant it produced. |
+| "Give alice a second machine", "加机器额度" | The cap lives on her invite row: raise the `machines` value in `tenants.json` (a running serve adopts disk edits), or mint a fresh code with `invite --machines 2`. |
 | "Recover an invite code I already sent", "找回邀请码" | `awewarm-hub list invites --reveal` — codes are kept in the clear for exactly this; guard the data dir. |
 | "Is the server alive?", "serve 还活着吗" | `awewarm-hub status` — the liveness line is best-effort; "NOT reachable" is information, not an error. |
 | "Hub is full", "容量不够" | Restart `serve` with higher `--max-tenants` (default 10, active tenants only) or `--max-conns-per-tenant`; a suspended tenant frees its slot without a restart. |
@@ -43,7 +44,8 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 - Each tenant gets a private workspace under `tenants/<id>/` — connections, state, RAM keyring, invisible across tenants.
 - `tenants.json` stores SHA-256 hashes of tenant tokens (pairings survive restarts); invite codes are kept in the clear so the operator can recover one already sent.
 - Nothing secret is ever written to disk — API keys live in server RAM and are re-pushed by each user's machine after a restart.
-- Capacity is set at serve time: `--max-tenants` (default 10, counting active tenants only), `--max-conns-per-tenant`, `--max-machines` (a token serves one machine by default). A light per-tenant rate limit (60 requests/minute) stops a looping client.
+- Capacity is set at serve time: `--max-tenants` (default 10, counting active tenants only), `--max-conns-per-tenant`, `--max-machines` (the default stamped into each new invite; `invite --machines N` overrides per code). A light per-tenant rate limit (60 requests/minute) stops a looping client.
+- The invite code is the one ledger of authorization: revoke/restore address codes only, suspension derives from the code's `revokedAt`, and a revoke never touches machine pairings.
 - Registry mutations (join, revoke, restore, usage writes) hold a cross-process transaction lock shared by the resident serve and one-shot CLI processes; the server reloads `tenants.json` when it changes underneath, so CLI-side invites/revokes take effect without a restart.
 - The engine (WarmServer, schedule, transport, the HTTP handler core) comes from the `awewarm` pip dependency, pinned to its minor version — the wire protocol stays in lockstep with the open-source client.
 
@@ -76,11 +78,12 @@ awewarm-hub status --details      # + every delegated connection: mode, next due
 awewarm-hub list invites          # every minted code: pending/used/expired/revoked
 ```
 
-### Suspend and restore
+### Revoke and restore
 
 ```bash
-awewarm-hub revoke t_ab12         # suspend a tenant (or awi_... to kill a pending invite)
-awewarm-hub restore t_ab12        # undo; refuses when the hub is full; clears paired machines
+awewarm-hub list invites --reveal   # find the code (the USED BY column names the tenant)
+awewarm-hub revoke awi_...          # pending stops pairing; used suspends its tenant
+awewarm-hub restore awi_...         # undo; refuses when the hub is full
 ```
 
 ## Core Rules

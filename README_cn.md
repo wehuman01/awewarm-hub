@@ -91,18 +91,18 @@ WantedBy=default.target
 awewarm-hub serve [--data-dir/--bind/--port]   # 常驻 hub 服务器
                  [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]
 awewarm-hub status [--details]                 # 容量、邀请码数量、租户、serve 存活状态
-awewarm-hub invite [--note <who>] [--expires-hours N]
+awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]
 awewarm-hub list users [--api|--reveal|--json] # 租户:健康度、用量、机器、加入时用的邀请码
-awewarm-hub list invites [--reveal|--json]     # 所有已签发邀请码:待用/已用/已吊销/已过期
-awewarm-hub revoke <t_...>|<awi_...>           # 停用一个租户 / 作废一个邀请码(可逆)
-awewarm-hub restore <t_...>|<awi_...>          # 撤销一次 revoke
+awewarm-hub list invites [--reveal|--json]     # 所有已签发邀请码:待用/已用/已吊销/已过期,及其机器上限
+awewarm-hub revoke <awi_...>                   # 作废一个邀请码:待用的立即失效,已用的停用其租户(可逆)
+awewarm-hub restore <awi_...>                  # 撤销一次 revoke
 awewarm-hub config [--data-dir /data|--unset]  # 本机默认数据目录
 awewarm-hub self-update [--check]              # 从 PyPI 升级
 ```
 
 ## 工作原理
 
-每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 只存租户 token 的 SHA-256 哈希,因此重启后配对关系依然有效;邀请码以明文保存,方便运维者找回已发出去的码(`list invites --reveal`)—— 任何能读到数据目录的人都能使用待用邀请码,请妥善保管。吊销是停用而非删除:`revoke` + `restore` 可对租户或邀请码往返操作;被停用的租户会释放其容量名额。一个 token 默认只服务一台机器(`--max-machines` 可调);`revoke` + `restore` 会清除该 token 已配对的机器。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。
+每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 只存租户 token 的 SHA-256 哈希,因此重启后配对关系依然有效;邀请码以明文保存,方便运维者找回已发出去的码(`list invites --reveal`)—— 任何能读到数据目录的人都能使用待用邀请码,请妥善保管。邀请码是授权的唯一台账:`revoke awi_...` 作废一个待用码,或停用它产出的租户(token 被拒、连接不再被调度、容量名额释放),`restore awi_...` 反向操作 —— 机器配对不受影响,往返完全无损。机器上限在铸造时盖进邀请码(`invite --machines N`,缺省取 `serve --max-machines`);要给在线用户加机器额度,改 `tenants.json` 里其邀请码行的 `machines` 值(运行中的 serve 会采纳磁盘改动),或直接发新码。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。
 
 一条信任规则,直说:hub 用用户的 API key 发送请求,因此明文 key 会经过它的内存。Hub 适合信任机器运维者(和 root)的人;和陌生人共享 VPS 不属于这种情况。
 
@@ -111,6 +111,8 @@ awewarm-hub self-update [--check]              # 从 PyPI 升级
 ## 从拆分前的 `awewarm serve --hub` 升级
 
 数据目录(`~/.awewarm-server`,或 `--data-dir`/旧 `hub config --data-dir` 设置的路径)原样沿用 —— 租户、邀请码、已持久化的数据目录设置全部继续工作。停掉旧的 serve,安装本包,启动 `awewarm-hub serve` 即可。旧写法(`awewarm serve --hub`、`awewarm hub ...`)在 awewarm 中以墓碑形式提示改用这里的对应命令。
+
+升级到 v0.6.0(破坏性变更):`revoke`/`restore` 只按邀请码寻址 —— `revoke t_...` 已删除;租户加入时用的码用 `list invites --reveal` 查。升级后首次启动会一次性迁移 `tenants.json`:租户上的挂起状态移到其邀请码的 `revokedAt`;明文码落盘之前铸造的老邀请行会连同它产出的租户一起删除(其 token 随之失效;工作区保留在磁盘上,发新码重新配对即可)。请同时升级本包并重启 serve,让两个进程说同一版台账格式。
 
 ## 配置
 
