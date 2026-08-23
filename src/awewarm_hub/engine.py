@@ -4,11 +4,11 @@ Each tenant gets a private WarmServer workspace under `tenants/<id>/` — its
 connections, state, and RAM keyring are invisible to other tenants by
 construction. Pairing flows through one-time invites minted by the operator
 (`awewarm-hub invite`); /v1/join burns one and returns a personal token.
-tenants.json stores SHA-256 hashes of tenant tokens; invite codes are kept
-in plaintext so the operator can recover one they already sent
-(`awewarm-hub list invites --reveal`). API keys still never touch disk, and
-the pairings survive a restart without waiting for every user to come back
-online.
+tenants.json keeps invite codes and tenant tokens in the clear so the
+operator can recover either one already sent (`awewarm-hub list invites
+--reveal` / `--token`); authentication compares the token's SHA-256 hash.
+API keys still never touch disk, and the pairings survive a restart without
+waiting for every user to come back online.
 
 This module leans on awewarm's semi-public server surface (WarmServer,
 ApiError, schedule, the config/locking helpers). Its dependency pins this
@@ -90,11 +90,12 @@ class Hub:
 
     Pairing flows through one-time invites minted by the operator
     (`awewarm-hub invite`); /v1/join burns one and returns a personal token.
-    tenants.json stores SHA-256 hashes of tenant tokens; invite codes are kept
-    in plaintext so the operator can recover one they already sent
-    (`awewarm-hub list invites --reveal`). API keys still never touch disk, and
-    unlike single-tenant mode the pairings survive a restart without waiting
-    for every user to come back online.
+    tenants.json keeps invite codes and tenant tokens in the clear so the
+    operator can recover either one already sent (`awewarm-hub list invites
+    --reveal` / `--token`); authentication compares the token's SHA-256
+    hash. API keys still never touch disk, and unlike single-tenant mode
+    the pairings survive a restart without waiting for every user to come
+    back online.
     """
 
     def __init__(self, data_dir, max_tenants=None, max_conns_per_tenant=None, max_machines=None):
@@ -129,7 +130,8 @@ class Hub:
             for tenant_id, record in self.registry["tenants"].items()
         }
 
-    # --- registry (hashes only; no secret ever lands here) ---
+    # --- registry (invite codes + tenant tokens in the clear for recovery;
+    # API keys never land here) ---
 
     def _load(self):
         try:
@@ -271,7 +273,8 @@ class Hub:
 
     def mint_invite(self, note=None, ttl_hours=INVITE_TTL_HOURS, machines=None):
         """One-time pairing code; the code itself is kept so `list invites`
-        can recover it (tenant tokens, in contrast, are stored hashed only).
+        can recover it (the tenant token it produces is kept the same way
+        for `--token`).
         `machines` is the machine cap this authorization carries — the cap is
         a property of the authorization, so it is stamped here; the default
         is the global one (`serve --max-machines`)."""
@@ -315,6 +318,10 @@ class Hub:
                 "usedBy": used_by,
                 "usedAt": entry.get("usedAt"),
                 "status": status,
+                # the token this code's tenant authenticates with, for
+                # `list invites --token`; absent on tenants that joined
+                # before tokens were kept on disk
+                "token": (self.registry["tenants"].get(used_by) or {}).get("token"),
             })
         rows.sort(key=lambda row: row["createdAt"] or "")
         return rows
@@ -342,6 +349,9 @@ class Hub:
             token = "awt_" + secrets.token_urlsafe(32)
             self.registry["tenants"][tenant_id] = {
                 "tokenHash": _hash_secret(token),
+                # in the clear so the operator can hand a lost token back
+                # (`list invites --token`); auth compares the hash above
+                "token": token,
                 "note": entry.get("note"),
                 "createdAt": schedule.iso(now),
                 "lastSeenAt": None,
@@ -630,6 +640,6 @@ def run(data_dir, bind="127.0.0.1", port=8790, tick_seconds=60,
     print(f"  listening: http://{bind}:{actual}")
     print(f"  hub mode: {len(engine.tenants)} of max {engine.max_tenants} tenants, "
           f"{engine.max_conns_per_tenant} connections each")
-    print("  auth: per-tenant tokens (hashes in tenants.json); pair by invite: awewarm-hub invite")
+    print("  auth: per-tenant tokens (kept in tenants.json; recovery: list invites --token); pair by invite: awewarm-hub invite")
     print("  Ctrl-C stops the server")
     _serve_forever(engine, httpd, tick_seconds)

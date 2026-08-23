@@ -34,10 +34,13 @@ first.
   `server._Handler` is the semi-public extension surface this package builds
   on. Bump the pin only with an engine release, in the same change.
 - **No secret ever touches disk**: API keys live in server RAM only and are
-  re-pushed by each user's machine after a restart. `tenants.json` stores
-  SHA-256 hashes of tenant tokens (pairings survive restarts); invite codes are
-  the one deliberate exception — kept in the clear so the operator can recover
-  one already sent, which is exactly why the data dir must be guarded.
+  re-pushed by each user's machine after a restart. `tenants.json` keeps
+  invite codes and tenant tokens in the clear — the two deliberate
+  exceptions — so the operator can recover either one already sent
+  (`list invites --reveal` / `--token`); authentication still compares a
+  token's SHA-256 hash. Anyone who can read the data dir can spend a
+  pending invite or act as a tenant, which is exactly why the data dir must
+  be guarded.
 - **Tenant isolation**: each tenant gets a private workspace under
   `tenants/<id>/` — connections, state, and the RAM keyring are invisible across
   tenants. Never add a code path that reads across workspaces.

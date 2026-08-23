@@ -93,7 +93,7 @@ awewarm-hub serve [--data-dir/--bind/--port]   # 常驻 hub 服务器
 awewarm-hub status [--details]                 # 容量、邀请码数量、租户、serve 存活状态
 awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]
 awewarm-hub list users [--api|--reveal|--json] # 租户:健康度、用量、机器、加入时用的邀请码
-awewarm-hub list invites [--reveal|--json]     # 所有已签发邀请码:待用/已用/已吊销/已过期,及其机器上限
+awewarm-hub list invites [--reveal|--token|--json]  # 所有已签发邀请码:待用/已用/已吊销/已过期,及其机器上限;--token 附带其租户的 token
 awewarm-hub revoke <awi_...>                   # 作废一个邀请码:待用的立即失效,已用的停用其租户(可逆)
 awewarm-hub restore <awi_...>                  # 撤销一次 revoke
 awewarm-hub config [--data-dir /data|--unset]  # 本机默认数据目录
@@ -102,11 +102,11 @@ awewarm-hub self-update [--check]              # 从 PyPI 升级
 
 ## 工作原理
 
-每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 只存租户 token 的 SHA-256 哈希,因此重启后配对关系依然有效;邀请码以明文保存,方便运维者找回已发出去的码(`list invites --reveal`)—— 任何能读到数据目录的人都能使用待用邀请码,请妥善保管。邀请码是授权的唯一台账:`revoke awi_...` 作废一个待用码,或停用它产出的租户(token 被拒、连接不再被调度、容量名额释放),`restore awi_...` 反向操作 —— 机器配对不受影响,往返完全无损。机器上限在铸造时盖进邀请码(`invite --machines N`,缺省取 `serve --max-machines`);要给在线用户加机器额度,改 `tenants.json` 里其邀请码行的 `machines` 值(运行中的 serve 会采纳磁盘改动),或直接发新码。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。
+每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 以明文保存邀请码和租户 token,方便运维者找回已发出去的任意一个(`list invites --reveal` / `--token`);认证时比对 token 的 SHA-256 哈希,因此重启后配对关系依然有效。用户弄丢了 token,运维者把它交回,用户用 `awewarm remote connect <url> --token <它>` 重连 —— 还是同一个租户、同一批连接。任何能读到数据目录的人都能花掉待用邀请码或冒充租户,请妥善保管。邀请码是授权的唯一台账:`revoke awi_...` 作废一个待用码,或停用它产出的租户(token 被拒、连接不再被调度、容量名额释放),`restore awi_...` 反向操作 —— 机器配对不受影响,往返完全无损。机器上限在铸造时盖进邀请码(`invite --machines N`,缺省取 `serve --max-machines`);要给在线用户加机器额度,改 `tenants.json` 里其邀请码行的 `machines` 值(运行中的 serve 会采纳磁盘改动),或直接发新码。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。
 
 一条信任规则,直说:hub 用用户的 API key 发送请求,因此明文 key 会经过它的内存。Hub 适合信任机器运维者(和 root)的人;和陌生人共享 VPS 不属于这种情况。
 
-任何密钥都不会写入磁盘 —— API key 只存在于服务器内存中,重启后由每个用户的机器重新推送。
+API key 永远不落盘 —— 只存在于服务器内存中,重启后由每个用户的机器重新推送。(邀请码和租户 token 是上述刻意的磁盘例外,为找回而保留;请保管好数据目录。)
 
 ## 从拆分前的 `awewarm serve --hub` 升级
 

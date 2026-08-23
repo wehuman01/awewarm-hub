@@ -93,7 +93,7 @@ awewarm-hub serve [--data-dir/--bind/--port]   # the resident hub server
 awewarm-hub status [--details]                 # capacity, invite counts, tenants, serve liveness
 awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]
 awewarm-hub list users [--api|--reveal|--json] # tenants: health, usage, machines, joining code
-awewarm-hub list invites [--reveal|--json]     # every minted code: pending/used/revoked/expired, its machine cap
+awewarm-hub list invites [--reveal|--token|--json]  # every minted code: pending/used/revoked/expired, its machine cap, its tenant's token (--token)
 awewarm-hub revoke <awi_...>                   # kill an invite: pending stops pairing, used suspends its tenant (reversible)
 awewarm-hub restore <awi_...>                  # undo a revoke
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
@@ -102,11 +102,11 @@ awewarm-hub self-update [--check]              # upgrade from PyPI
 
 ## How It Works
 
-Each tenant gets a private workspace under `tenants/<id>/` (connections, state, RAM keyring — invisible across tenants). `tenants.json` stores SHA-256 hashes of tenant tokens, so pairings survive a restart; invite codes are kept in the clear so the operator can recover one already sent (`list invites --reveal`) — anyone who can read the data dir can use a pending invite, so guard it. The invite code is the one ledger of authorization: `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed), and `restore awi_...` undoes either — machine pairings are untouched, so the round-trip is lossless. A machine cap is stamped into each invite at minting (`invite --machines N`, defaulting to `serve --max-machines`); to give an online user more machines, raise the `machines` value on their invite row in `tenants.json` (a running serve adopts the edit) or hand them a fresh code. A light per-tenant rate limit (60 requests/minute) stops a looping client.
+Each tenant gets a private workspace under `tenants/<id>/` (connections, state, RAM keyring — invisible across tenants). `tenants.json` keeps invite codes and tenant tokens in the clear so the operator can recover either one already sent (`list invites --reveal` / `--token`); authentication compares a token's SHA-256 hash, so pairings survive a restart. A user who lost their token is handed it back and reconnects with `awewarm remote connect <url> --token <it>` — same tenant, same connections. Anyone who can read the data dir can spend a pending invite or act as a tenant, so guard it. The invite code is the one ledger of authorization: `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed), and `restore awi_...` undoes either — machine pairings are untouched, so the round-trip is lossless. A machine cap is stamped into each invite at minting (`invite --machines N`, defaulting to `serve --max-machines`); to give an online user more machines, raise the `machines` value on their invite row in `tenants.json` (a running serve adopts the edit) or hand them a fresh code. A light per-tenant rate limit (60 requests/minute) stops a looping client.
 
 One trust rule, stated plainly: the hub fires requests with its users' API keys, so their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root); a shared VPS with strangers is not that.
 
-Nothing secret is ever written to disk — API keys live in server RAM and are re-pushed by each user's machine after a restart.
+API keys never touch disk — they live in server RAM and are re-pushed by each user's machine after a restart. Invite codes and tenant tokens are the on-disk exceptions above, kept recoverable on purpose; guard the data dir.
 
 ## Upgrading from pre-split `awewarm serve --hub`
 

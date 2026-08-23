@@ -6,7 +6,7 @@ This document is for AI coding agents. Help the user operate `awewarm-hub`, the 
 
 - The hub fires requests with its **users' API keys** — their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root). Make sure the user understands this before they invite anyone.
 - `awewarm-hub serve` is a **resident process**. Never run or background it from an agent session — it belongs in the user's terminal, tmux, or a systemd unit. The agent's job is everything around it: install, status, invites, tenants.
-- Restarting `serve` is safe by design: no secrets live on disk, and each user's machine re-claims and re-pushes its keys on next contact.
+- Restarting `serve` is safe by design: API keys never touch disk, and each user's machine re-claims and re-pushes its keys on next contact. (Invite codes and tenant tokens are the on-disk exceptions, kept recoverable for the operator — guard the data dir.)
 - Invite codes (`awi_...`) are one-time secrets (48 h by default). Anyone who can read the data dir — or sees the code — can use a pending invite. Hand them out promptly and privately.
 
 ## Language Behavior
@@ -188,7 +188,7 @@ Read-only commands (safe to run in agent):
 ```bash
 awewarm-hub status [--details]     # dashboard; --details appends every delegated connection
 awewarm-hub list users [--api|--reveal|--json]   # tenants (health, usage, machines)
-awewarm-hub list invites [--reveal|--json]       # every minted code and its fate
+awewarm-hub list invites [--reveal|--token|--json]  # every minted code and its fate; --token adds each used code's tenant token
 awewarm-hub config                 # resolved data dir and where it comes from
 awewarm-hub self-update --check    # show current/latest version
 ```
@@ -212,7 +212,7 @@ awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tena
 ## Safety Rules
 
 - Never run `serve` from the agent, and never background it — it is a resident process the operator owns.
-- Invite codes are one-time secrets. Never log them beyond what the command prints for handoff, and remind the user to send them over a private channel.
+- Invite codes are one-time secrets; tenant tokens are live credentials. Never log either beyond what the command prints for handoff, and remind the user to send them over a private channel.
 - Revoke before you delete nothing: revocation is suspension, not deletion, and `restore` undoes it. Both address invite codes (`awi_...`) — a tenant's code is the USED BY match in `list invites --reveal`. Prefer `revoke` for anything reversible.
 - Users' API keys pass through the hub's RAM. State the trust rule plainly before the user invites strangers.
 - Restarting `serve` is safe (keys re-push automatically); still, coordinate it with the user instead of surprising them.

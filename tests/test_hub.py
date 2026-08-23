@@ -179,13 +179,12 @@ class PairingTests(HubCase):
             remote_client.join(url, "awi_" + "i" * 30)
         self.assertIn("404", str(ctx.exception))
 
-    def test_registry_stores_hashes_never_plaintext(self):
-        token, _ = self.join("alice")
-        on_disk = (self.data_dir / "tenants.json").read_text()
-        self.assertNotIn(token, on_disk)
-        for record in self.registry()["tenants"].values():
-            self.assertEqual(len(record["tokenHash"]), 64)  # sha256 hex
-        self.assertFalse(list(self.data_dir.rglob("secrets.json")))
+    def test_registry_keeps_the_hash_for_auth_and_the_token_for_recovery(self):
+        token, tenant_id = self.join("alice")
+        record = self.registry()["tenants"][tenant_id]
+        self.assertEqual(len(record["tokenHash"]), 64)  # sha256 hex — what auth compares
+        self.assertEqual(record["token"], token)  # in the clear for `list invites --token`
+        self.assertFalse(list(self.data_dir.rglob("secrets.json")))  # API keys still never touch disk
 
     def test_tenant_cap(self):
         self.make_hub(max_tenants=1)
@@ -855,10 +854,48 @@ class HubCliTests(IsolatedTestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn(code, result.output)
 
-    def test_invites_rejects_the_removed_token_flag(self):
+    def test_invites_hides_tenant_tokens_by_default(self):
+        engine_hub = engine.Hub(self.data_dir)
+        joined = engine_hub.join(engine_hub.mint_invite("alice"))
+        result = invoke(["list", "invites"] + self.dir_opt + ["--reveal"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertNotIn(joined["token"], result.output)
+        self.assertIn("pass --token", result.output)
+
+    def test_invites_token_shows_the_tenant_token(self):
+        engine_hub = engine.Hub(self.data_dir)
+        joined = engine_hub.join(engine_hub.mint_invite("alice"))
         result = invoke(["list", "invites"] + self.dir_opt + ["--token"])
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("No such option", result.output)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("TOKEN", result.output)
+        self.assertIn(joined["token"], result.output)
+
+    def test_invites_token_marks_rows_without_a_tenant(self):
+        engine_hub = engine.Hub(self.data_dir)
+        engine_hub.mint_invite("alice")  # pending — no tenant, no token
+        result = invoke(["list", "invites"] + self.dir_opt + ["--token"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("—", result.output)
+
+    def test_invites_token_shows_a_dash_for_tenants_that_predate_it(self):
+        engine_hub = engine.Hub(self.data_dir)
+        joined = engine_hub.join(engine_hub.mint_invite("alice"))
+        path = Path(self.data_dir, "tenants.json")
+        registry = json.loads(path.read_text())
+        registry["tenants"][joined["tenantId"]].pop("token")  # older versions never stored it
+        path.write_text(json.dumps(registry))
+        result = invoke(["list", "invites"] + self.dir_opt + ["--token"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertNotIn("Traceback", result.output)
+        self.assertIn("predate", result.output)
+
+    def test_invites_json_follows_token_flag(self):
+        engine_hub = engine.Hub(self.data_dir)
+        joined = engine_hub.join(engine_hub.mint_invite("alice"))
+        masked = invoke(["list", "invites"] + self.dir_opt + ["--json"])
+        self.assertNotIn(joined["token"], masked.output)
+        revealed = invoke(["list", "invites"] + self.dir_opt + ["--json", "--token"])
+        self.assertEqual(json.loads(revealed.output)[0]["token"], joined["token"])
 
     def test_invites_shows_used_and_who_used_it(self):
         engine_hub = engine.Hub(self.data_dir)

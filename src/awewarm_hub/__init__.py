@@ -7,7 +7,7 @@ adds tenants, invites, quotas, and the operator CLI on top.
 import subprocess
 from pathlib import Path
 
-__version__ = "0.5.6"
+__version__ = "0.5.7"
 
 
 def _checkout_root():

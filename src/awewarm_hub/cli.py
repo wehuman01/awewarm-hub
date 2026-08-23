@@ -76,8 +76,9 @@ def serve_command(data_dir, bind, port, max_tenants, max_conns_per_tenant, max_m
   awewarm-hub serve --max-tenants 20 --max-machines 2
 
 Users pair with: awewarm remote connect <url> --invite <code from
-`awewarm-hub invite`>. Nothing secret is ever written to disk: API keys
-live in server RAM; tenants.json carries token and invite hashes only.
+`awewarm-hub invite`>. Invite codes and tenant tokens are the only secrets
+on disk — kept in the clear so the operator can recover either (list
+invites --reveal / --token); API keys live in server RAM only.
     """
     if max_tenants <= 0 or max_conns_per_tenant <= 0 or max_machines <= 0:
         die("--max-tenants, --max-conns-per-tenant, and --max-machines must be greater than 0")
@@ -335,25 +336,34 @@ def list_users_command(data_dir, show_api, show_codes, as_json):
 @list_group.command("invites")
 @click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
 @click.option("--reveal", "show_codes", is_flag=True, help="Show full invite codes instead of masked ones (pending codes still work).")
-@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON (codes follow --reveal).")
-def list_invites_command(data_dir, show_codes, as_json):
+@click.option("--token", "show_tokens", is_flag=True, help="Also show each used invite's tenant token — hand one back to a user who lost it (— for tenants that predate tokens on disk).")
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON (codes follow --reveal, tokens --token).")
+def list_invites_command(data_dir, show_codes, show_tokens, as_json):
     """List minted invites: code, status, expiry, and who joined with it."""
     engine = Hub(_resolve_server_data_dir(data_dir))
     rows = engine.list_invites()
     if as_json:
-        out = [dict(row, code=(row["code"] if show_codes else _mask_invite(row["code"]))) for row in rows]
+        out = [
+            dict(row,
+                 code=(row["code"] if show_codes else _mask_invite(row["code"])),
+                 token=(row["token"] if show_tokens else _mask_invite(row["token"])))
+            for row in rows
+        ]
         click.echo(json.dumps(out, indent=2))
         return
     if not rows:
         click.echo("No invites minted yet — mint one with: awewarm-hub invite --note <who>")
         return
     now = datetime.now().astimezone()
+    headers = ["NOTE", "CODE", "STATUS", "MACHINES", "EXPIRES", "USED BY", "USED AT", "MINTED"]
+    if show_tokens:
+        headers.append("TOKEN")
     table_rows = []
     for row in rows:
         expires = schedule.parse_ts(row["expiresAt"])
         created = schedule.parse_ts(row["createdAt"])
         used = schedule.parse_ts(row["usedAt"]) if row["usedAt"] else None
-        table_rows.append([
+        cells = [
             row["note"] or "—",
             (row["code"] or "—") if show_codes else _mask_invite(row["code"]),
             row["status"],
@@ -362,12 +372,19 @@ def list_invites_command(data_dir, show_codes, as_json):
             row["usedBy"] or "—",
             used.strftime("%m-%d %H:%M") if used else "—",
             created.strftime("%m-%d %H:%M") if created else "—",
-        ])
-    _print_table(["NOTE", "CODE", "STATUS", "MACHINES", "EXPIRES", "USED BY", "USED AT", "MINTED"], table_rows)
+        ]
+        if show_tokens:
+            cells.append(row["token"] or "—")
+        table_rows.append(cells)
+    _print_table(headers, table_rows)
     if not show_codes:
         click.echo("codes are masked — pass --reveal to show them (a pending code still pairs)")
     elif any(row["code"] is None for row in rows):
         click.echo("codes shown as — were minted before codes were kept on disk; mint a fresh invite for those")
+    if not show_tokens and any(row["token"] for row in rows):
+        click.echo("tenant tokens hidden — pass --token to show them (a user reconnects with: awewarm remote connect <url> --token <it>)")
+    elif show_tokens and any(row["usedBy"] and not row["token"] for row in rows):
+        click.echo("tokens shown as — predate tokens being kept on disk; those users re-pair with a fresh invite")
     if any(row["machines"] is None for row in rows):
         click.echo("MACHINES 'global' = minted before per-invite caps; follows the live serve --max-machines")
 

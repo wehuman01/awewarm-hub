@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.7
+
+`list invites --token` shows the tenant token behind each used invite, so a user who lost theirs (reinstall, new machine) is handed back the same identity — connections, quotas, workspace — instead of re-pairing into a fresh tenant: they reconnect with `awewarm remote connect <url> --token <it>`. The flag is the old name back with honest semantics: `--token` originally *was* the code-reveal flag, renamed to `--reveal` in awewarm because it showed codes, not tokens.
+
+This changes a stable design constraint, eyes open: tenant tokens now join invite codes as the deliberate on-disk plaintext, kept in `tenants.json` for exactly this recovery (authentication still compares the token's SHA-256 hash — the auth path is untouched). The exposure widens accordingly: a data-dir reader could already spend a pending invite; now they can also act as an existing tenant (push connections, read state — never read API keys, which still live in RAM only). Docs and help text now state the rule as "invite codes and tenant tokens are the on-disk exceptions; guard the data dir". Tenants that joined before this release show `—` (the token wasn't kept) and keep the fresh-invite path; `--json` follows `--token` the way it follows `--reveal`.
+
 ## v0.5.6
 
 **Breaking:** revoke/restore converge to the invite code as their single entry point, and the code becomes the only ledger of authorization. `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed) — `revoke t_...` / `restore t_...` are gone and now error with a pointer to `list invites --reveal` (the USED BY column names the tenant). The code is the lifetime name of an authorization: once used, its `usedBy → tenant` link is permanent, so tenant-addressing was always a second address for the same state transition — with a second code path, which had already drifted (the `t_` path wiped machine pairings, the `awi_` path didn't).
