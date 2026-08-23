@@ -79,7 +79,8 @@ and the affected tests in the same change.
 
 ## Branch model and release
 
-Work lands on `main`, then tagged `vX.Y.Z`. The release workflow
+Work lands on `dev`, is promoted to `main`, then tagged `vX.Y.Z` — the same
+flow as awewarm. The release workflow
 (`.github/workflows/release.yml`) verifies the tag matches the package
 version, extracts the matching `## vX.Y.Z` section from `docs/CHANGELOG.md` as
 release notes, and publishes to PyPI. Add a CHANGELOG entry as part of any
