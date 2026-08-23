@@ -90,9 +90,12 @@ def _resolve_server_data_dir(flag):
 @click.option("--data-dir", default=None, show_default="~/.awewarm-server", help="Directory for the hub registry and tenants (~/.awewarm-server, or the one `config --data-dir` saved).")
 @click.option("--bind", default="127.0.0.1", show_default=True, help="Address to listen on.")
 @click.option("--port", default=8790, show_default=True, type=int, help="Port to listen on (0 picks a free one).")
-@click.option("--max-tenants", "max_tenants", default=10, show_default=True, type=int, help="Cap on active tenants (suspended ones free their slot).")
-@click.option("--max-conns-per-tenant", "max_conns_per_tenant", default=5, show_default=True, type=int, help="Delegated connections each tenant may keep.")
-@click.option("--max-machines", "max_machines", default=1, show_default=True, type=int, help="Default machine cap stamped into each new invite (override per code: invite --machines).")
+@click.option("--max-tenants", "max_tenants", default=None, type=int,
+              help="Cap on active tenants, suspended ones free their slot (default 10, or the value `config --max-tenants` saved).")
+@click.option("--max-conns-per-tenant", "max_conns_per_tenant", default=None, type=int,
+              help="Delegated connections each tenant may keep (default 5, or the value `config --max-conns-per-tenant` saved).")
+@click.option("--max-machines", "max_machines", default=None, type=int,
+              help="Machine cap stamped into each new invite, override per code: invite --machines (default 1, or the value `config --max-machines` saved).")
 @click.option("--tick-seconds", default=60, show_default=True, type=int, help="Seconds between scheduling passes.")
 def serve_command(data_dir, bind, port, max_tenants, max_conns_per_tenant, max_machines, tick_seconds):
     """Run the hub server: many users, one-time invites to pair.
@@ -102,13 +105,21 @@ def serve_command(data_dir, bind, port, max_tenants, max_conns_per_tenant, max_m
   awewarm-hub serve --data-dir /data         # ...or keep the registry elsewhere
   awewarm-hub serve --max-tenants 20 --max-machines 2
 
-Users pair with: awewarm remote connect <url> --invite <code from
-`awewarm-hub invite`>. Invite codes and tenant tokens are the only secrets
-on disk — kept in the clear so the operator can recover either (list
-invites --reveal / --token); API keys live in server RAM only.
+Caps left unset resolve to the values `awewarm-hub config` saved, else the
+defaults, and can be retuned while serving: awewarm-hub config --max-tenants 20
+(a running serve adopts them without a restart). Users pair with: awewarm
+remote connect <url> --invite <code from `awewarm-hub invite`>. Invite codes
+and tenant tokens are the only secrets on disk — kept in the clear so the
+operator can recover either one (list invites --reveal / --token); API keys
+live in server RAM only.
     """
-    if max_tenants <= 0 or max_conns_per_tenant <= 0 or max_machines <= 0:
-        die("--max-tenants, --max-conns-per-tenant, and --max-machines must be greater than 0")
+    for name, value in (
+        ("--max-tenants", max_tenants),
+        ("--max-conns-per-tenant", max_conns_per_tenant),
+        ("--max-machines", max_machines),
+    ):
+        if value is not None and value <= 0:
+            die(f"{name} must be greater than 0")
     run(
         _resolve_server_data_dir(data_dir), bind=bind, port=port, tick_seconds=tick_seconds,
         max_tenants=max_tenants, max_conns_per_tenant=max_conns_per_tenant,
@@ -117,25 +128,48 @@ invites --reveal / --token); API keys live in server RAM only.
 
 
 @cli.command("config")
-@click.option("--data-dir", default=None, help="Set the data dir `serve` and hub commands use on this machine by default.")
-@click.option("--unset", "unset_dir", is_flag=True, help="Forget the setting; fall back to the default (~/.awewarm-server).")
-def config_command(data_dir, unset_dir):
-    """Show or set the default data dir for serve and hub commands.
+@click.option("--data-dir", default=None,
+              help="Alone: set the data dir serve and hub commands use on this machine by default. With cap flags: the registry they apply to (one-shot, not persisted).")
+@click.option("--unset", "unset_dir", is_flag=True, help="Forget the data-dir setting; fall back to the default (~/.awewarm-server).")
+@click.option("--max-tenants", "max_tenants", type=int, default=None,
+              help="Cap on active tenants, suspended ones free their slot; a running serve adopts it without a restart.")
+@click.option("--max-conns-per-tenant", "max_conns_per_tenant", type=int, default=None,
+              help="Delegated connections each tenant may keep; adopted live.")
+@click.option("--max-machines", "max_machines", type=int, default=None,
+              help="Machine cap stamped into each new invite (existing codes keep theirs); adopted live.")
+@click.option("--reset", "reset_caps", is_flag=True,
+              help="Clear the saved caps; enforcement falls back to the defaults (10 tenants, 5 conns, 1 machine) until set again.")
+def config_command(data_dir, unset_dir, max_tenants, max_conns_per_tenant, max_machines, reset_caps):
+    """Show or set hub settings: the data dir and the capacity caps.
 
     \b
-      awewarm-hub config                    # show the resolved data dir
-      awewarm-hub config --data-dir /data   # persist it (a --data-dir flag
-                                             #   still overrides once)
+      awewarm-hub config                            # show what's in effect and where from
+      awewarm-hub config --max-tenants 20           # a running serve adopts it, no restart
+      awewarm-hub config --data-dir /data           # persist the data dir (a --data-dir flag
+                                                    #   to serve still overrides once)
     """
+    caps = (max_tenants, max_conns_per_tenant, max_machines)
+    caps_given = reset_caps or any(value is not None for value in caps)
     if data_dir and unset_dir:
         die("pass either --data-dir or --unset, not both")
+    if unset_dir and caps_given:
+        die("pass either --unset or the cap flags, not both")
+    if reset_caps and any(value is not None for value in caps):
+        die("pass either --reset or cap values, not both")
+    for name, value in (
+        ("--max-tenants", max_tenants),
+        ("--max-conns-per-tenant", max_conns_per_tenant),
+        ("--max-machines", max_machines),
+    ):
+        if value is not None and value <= 0:
+            die(f"{name} must be greater than 0")
     if unset_dir:
         config = load_config()
         (config.get("global") or {}).pop("serverDataDir", None)
         save_config(config)
         click.echo(f"✓ Server data dir reset to the default: {DEFAULT_SERVER_DATA_DIR}")
         return
-    if data_dir:
+    if data_dir and not caps_given:
         resolved = str(Path(data_dir).expanduser())
         config = load_config()
         config.setdefault("global", {})["serverDataDir"] = resolved
@@ -143,10 +177,25 @@ def config_command(data_dir, unset_dir):
         click.echo(f"✓ Server data dir set to {resolved}")
         click.echo("  awewarm-hub commands on this machine use it unless --data-dir is passed")
         return
+    engine = Hub(_resolve_server_data_dir(data_dir))
+    if caps_given:
+        engine.set_caps(max_tenants, max_conns_per_tenant, max_machines, reset=reset_caps)
+        click.echo(
+            f"✓ Caps now {engine.max_tenants} tenants, {engine.max_conns_per_tenant} connections each, "
+            f"{engine.max_machines} machine(s) per invite"
+        )
+        click.echo("  a running serve adopts them without a restart")
+        return
     persisted = _persisted_server_data_dir()
-    click.echo(f"data dir: {_resolve_server_data_dir(None)} "
+    click.echo(f"data dir: {engine.data_dir} "
                f"({'set with: awewarm-hub config --data-dir' if persisted else 'the default'})")
     click.echo("  used by awewarm-hub commands; override once with --data-dir")
+    record = engine.serve_record
+    click.echo(f"max tenants: {engine.max_tenants} ({'saved' if record.get('maxTenants') is not None else 'the default'})")
+    click.echo(f"max conns per tenant: {engine.max_conns_per_tenant} ({'saved' if record.get('maxConnsPerTenant') is not None else 'the default'})")
+    click.echo(f"max machines per invite: {engine.max_machines} ({'saved' if record.get('maxMachines') is not None else 'the default'})")
+    click.echo("  change with: awewarm-hub config --max-tenants 20 --max-conns-per-tenant 10 --max-machines 2")
+    click.echo("  a running serve adopts cap changes without a restart; --reset clears them")
 
 
 def _probe_serve(record):
@@ -189,7 +238,7 @@ def status_command(data_dir, show_details):
     if record.get("maxTenants") is not None:
         click.echo(f"  tenants: {active}/{record['maxTenants']} active")
     else:
-        click.echo(f"  tenants: {active} active (caps unknown — recorded when serve launches)")
+        click.echo(f"  tenants: {active} active (caps unknown — set with: awewarm-hub config --max-tenants)")
     if suspended:
         click.echo(f"             {suspended} suspended (slot free; restore their invite: awewarm-hub restore <awi_...>)")
     conn_cap = record.get("maxConnsPerTenant")
@@ -205,7 +254,7 @@ def status_command(data_dir, show_details):
     )
     invites_line = ", ".join(f"{invite_counts[k]} {k}" for k in ("pending", "used", "expired", "revoked") if invite_counts.get(k))
     click.echo(f"  invites: {invites_line or 'none minted'} (mint: awewarm-hub invite)")
-    if not record:
+    if not record.get("startedAt"):  # caps may be pre-set via config before any launch
         click.echo("  serve: never launched against this data dir")
     else:
         probe_url, probe = _probe_serve(record)

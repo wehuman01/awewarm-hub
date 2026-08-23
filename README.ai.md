@@ -190,7 +190,7 @@ Read-only commands (safe to run in agent):
 awewarm-hub status [--details]     # dashboard; --details appends every delegated connection
 awewarm-hub list users [--api|--reveal|--json]   # tenants (health, usage, machines)
 awewarm-hub list invites [--reveal|--token|--json]  # every minted code and its fate; --token adds each used code's tenant token
-awewarm-hub config                 # resolved data dir and where it comes from
+awewarm-hub config                 # resolved data dir and capacity caps, and where they come from
 awewarm-hub self-update --check    # show current/latest version
 ```
 
@@ -202,6 +202,8 @@ awewarm-hub revoke <awi_...>                    # kill an invite: pending stops 
 awewarm-hub revoke <awi_...> --delete           # wipe the ledger row outright; a used one takes its tenant (irreversible)
 awewarm-hub restore <awi_...>                   # undo a revoke
 awewarm-hub config --data-dir /data [--unset]   # persist the default data dir
+awewarm-hub config --max-tenants 20 [--max-conns-per-tenant 10] [--max-machines 2] [--reset]
+                                                # capacity caps; a running serve adopts them without a restart
 awewarm-hub self-update                         # upgrade awewarm-hub
 ```
 

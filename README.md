@@ -98,16 +98,35 @@ awewarm-hub revoke <awi_...>                   # kill an invite: pending stops p
 awewarm-hub revoke <awi_...> --delete          # wipe the ledger row outright; a used one takes its tenant (irreversible)
 awewarm-hub restore <awi_...>                  # undo a revoke
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
+awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
+                                               # capacity caps; a running serve adopts them without a restart
 awewarm-hub self-update [--check]              # upgrade from PyPI
 ```
 
 ## How It Works
 
-Each tenant gets a private workspace under `tenants/<id>/` (connections, state, RAM keyring — invisible across tenants). `tenants.json` keeps invite codes and tenant tokens in the clear so the operator can recover either one already sent (`list invites --reveal` / `--token`); authentication compares a token's SHA-256 hash, so pairings survive a restart. A user who lost their token is handed it back and reconnects with `awewarm remote connect <url> --token <it>` — same tenant, same connections. Anyone who can read the data dir can spend a pending invite or act as a tenant, so guard it. The invite code is the one ledger of authorization: `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed), and `restore awi_...` undoes either — machine pairings are untouched, so the round-trip is lossless. `revoke awi_... --delete` wipes the row from the ledger instead: no revoked tombstone stays, a used one takes its tenant with it (token dead, capacity slot freed, workspace kept on disk), and `restore` cannot bring any of it back; it also accepts an already-revoked row — the purge-a-tombstone case. A machine cap is stamped into each invite at minting (`invite --machines N`, defaulting to `serve --max-machines`); to give an online user more machines, raise the `machines` value on their invite row in `tenants.json` (a running serve adopts the edit) or hand them a fresh code. A light per-tenant rate limit (60 requests/minute) stops a looping client.
+Each tenant gets a private workspace under `tenants/<id>/` (connections, state, RAM keyring — invisible across tenants). `tenants.json` keeps invite codes and tenant tokens in the clear so the operator can recover either one already sent (`list invites --reveal` / `--token`); authentication compares a token's SHA-256 hash, so pairings survive a restart. A user who lost their token is handed it back and reconnects with `awewarm remote connect <url> --token <it>` — same tenant, same connections. Anyone who can read the data dir can spend a pending invite or act as a tenant, so guard it. The invite code is the one ledger of authorization: `revoke awi_...` kills a pending code or suspends the tenant that used it (token rejected, connections stop ticking, capacity slot freed), and `restore awi_...` undoes either — machine pairings are untouched, so the round-trip is lossless. `revoke awi_... --delete` wipes the row from the ledger instead: no revoked tombstone stays, a used one takes its tenant with it (token dead, capacity slot freed, workspace kept on disk), and `restore` cannot bring any of it back; it also accepts an already-revoked row — the purge-a-tombstone case. A machine cap is stamped into each invite at minting (`invite --machines N`, defaulting to the `max-machines` cap); to give an online user more machines, raise the `machines` value on their invite row in `tenants.json` (a running serve adopts the edit) or hand them a fresh code. The three capacity caps live in the registry's serve record: serve flags stamp them at launch, and `awewarm-hub config --max-tenants 20` retunes them at any time — a running serve adopts the new values without a restart (every tenant action and each tick re-read the record). A light per-tenant rate limit (60 requests/minute) stops a looping client.
 
 One trust rule, stated plainly: the hub fires requests with its users' API keys, so their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root); a shared VPS with strangers is not that.
 
 API keys never touch disk — they live in server RAM and are re-pushed by each user's machine after a restart. Invite codes and tenant tokens are the on-disk exceptions above, kept recoverable on purpose; guard the data dir.
+
+## Security
+
+Short version for users: every ordinary leakage path is closed by design; the one thing that remains is trusting the hub's machine.
+
+- **Account logins never leave your machine.** The hub only accepts API-key (subscription) connections; CLI-account (OAuth) credentials are rejected at the wire and live on wherever you logged in. There is no username, password, or session cookie to leak.
+- **Your API key exists on the hub in RAM only.** Never written to disk (connection files carry no key — after a restart your own machine re-pushes it), never logged (activation results are scrubbed of keys and auth headers), and no endpoint reads one back — `/v1/state` reports only whether a key is present. Traffic rides the operator's HTTPS tunnel end to end.
+- **A stolen tenant token is not a stolen API key.** With your `awt_...` an attacker can manage and trigger *your* connections, but cannot read a stored key and cannot send it to their own server — replacing a connection always pushes a fresh key that overwrites the old one. If a token leaks: have the operator `revoke` your invite (the token dies at once), re-pair with a fresh code; your machine re-pushes everything.
+- **Tenants are invisible to each other** — private workspaces, constant-time token-hash comparison, a 60 req/min per-tenant rate limit.
+
+The one boundary, stated plainly: the hub fires warm-ups *with your key*, so its plaintext passes through the hub process's memory. Whoever operates the hub — or holds root on its box — can read it. Everything above is enforced by design; this last item is a trust decision, the same rule stated under [How It Works](#how-it-works): a hub is exactly as trustworthy as the machine it runs on.
+
+Recommendations:
+
+- Users: delegate a dedicated, revocable key — not the one the rest of your tooling lives on — and rotate it whenever in doubt.
+- Users: connect via the hub's `https://` URL only, never a bare `http://host:port`, and keep the client package current.
+- Operators: expose the hub only through the cloudflared tunnel (or an equivalent TLS proxy), keep the default `--bind 127.0.0.1`, guard the data dir (`tenants.json` holds invites and tenant tokens in the clear, by design), and keep the package updated.
 
 ## Upgrading from pre-split `awewarm serve --hub`
 
@@ -117,7 +136,9 @@ Upgrading to v0.5.6 (breaking): `revoke`/`restore` now address invite codes only
 
 ## Config
 
-`awewarm-hub config [--data-dir /data]` persists the default data dir on the hub machine (the flag overrides once; `--unset` clears it). The default is `~/.awewarm-server`, shared with awewarm's solo server. Inside it: `tenants.json` (token hashes, invite codes, the serve record with caps/bind/version/start time) and one private `tenants/<id>/` workspace per tenant. Serve stamps its caps into `tenants.json` at launch so one-shot CLI processes on the same box read the same numbers; a data dir whose serve never launched says "caps unknown" instead of guessing.
+`awewarm-hub config` is the settings entry — one command, two concerns. Alone it shows what is in effect and where it comes from: the data dir and the three capacity caps. `--data-dir /data` persists the default data dir on the hub machine (`--unset` clears it); when given with cap flags it instead selects the registry they apply to, once, like the `--data-dir` flag on every other command. The default is `~/.awewarm-server`, shared with awewarm's solo server. Inside it: `tenants.json` (token hashes, invite codes, the serve record with caps/bind/version/start time) and one private `tenants/<id>/` workspace per tenant.
+
+The caps — `--max-tenants`, `--max-conns-per-tenant`, `--max-machines` (`--reset` clears them back to the 10/5/1 defaults) — live in that serve record, the one place every process reads: serve flags stamp them at launch, `config` retunes them at any time, and a running serve adopts the new values without a restart (every tenant action and each scheduling tick re-read the record; one-shot CLI processes read the same numbers, even before a first launch).
 
 ## Self-Update
 

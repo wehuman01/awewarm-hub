@@ -98,16 +98,35 @@ awewarm-hub revoke <awi_...>                   # 作废一个邀请码:待用的
 awewarm-hub revoke <awi_...> --delete          # 从台账中彻底删除该行;已用的连其租户一并删除(不可逆)
 awewarm-hub restore <awi_...>                  # 撤销一次 revoke
 awewarm-hub config [--data-dir /data|--unset]  # 本机默认数据目录
+awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
+                                               # 容量上限;运行中的 serve 无需重启即采纳
 awewarm-hub self-update [--check]              # 从 PyPI 升级
 ```
 
 ## 工作原理
 
-每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 以明文保存邀请码和租户 token,方便运维者找回已发出去的任意一个(`list invites --reveal` / `--token`);认证时比对 token 的 SHA-256 哈希,因此重启后配对关系依然有效。用户弄丢了 token,运维者把它交回,用户用 `awewarm remote connect <url> --token <它>` 重连 —— 还是同一个租户、同一批连接。任何能读到数据目录的人都能花掉待用邀请码或冒充租户,请妥善保管。邀请码是授权的唯一台账:`revoke awi_...` 作废一个待用码,或停用它产出的租户(token 被拒、连接不再被调度、容量名额释放),`restore awi_...` 反向操作 —— 机器配对不受影响,往返完全无损。`revoke awi_... --delete` 则把该行从台账中彻底删除:不留吊销墓碑,已用的连其租户一并删除(token 失效、容量名额释放、工作区保留在磁盘上),`restore` 无法找回;已吊销的行同样可以 --delete —— 即清理墓碑的场景。机器上限在铸造时盖进邀请码(`invite --machines N`,缺省取 `serve --max-machines`);要给在线用户加机器额度,改 `tenants.json` 里其邀请码行的 `machines` 值(运行中的 serve 会采纳磁盘改动),或直接发新码。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。
+每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 以明文保存邀请码和租户 token,方便运维者找回已发出去的任意一个(`list invites --reveal` / `--token`);认证时比对 token 的 SHA-256 哈希,因此重启后配对关系依然有效。用户弄丢了 token,运维者把它交回,用户用 `awewarm remote connect <url> --token <它>` 重连 —— 还是同一个租户、同一批连接。任何能读到数据目录的人都能花掉待用邀请码或冒充租户,请妥善保管。邀请码是授权的唯一台账:`revoke awi_...` 作废一个待用码,或停用它产出的租户(token 被拒、连接不再被调度、容量名额释放),`restore awi_...` 反向操作 —— 机器配对不受影响,往返完全无损。`revoke awi_... --delete` 则把该行从台账中彻底删除:不留吊销墓碑,已用的连其租户一并删除(token 失效、容量名额释放、工作区保留在磁盘上),`restore` 无法找回;已吊销的行同样可以 --delete —— 即清理墓碑的场景。机器上限在铸造时盖进邀请码(`invite --machines N`,缺省取 `max-machines` 上限);要给在线用户加机器额度,改 `tenants.json` 里其邀请码行的 `machines` 值(运行中的 serve 会采纳磁盘改动),或直接发新码。三个容量上限都存放在 registry 的 serve 记录里:serve 参数在启动时盖戳,`awewarm-hub config --max-tenants 20` 随时可改 —— 运行中的 serve 无需重启即采纳(每次租户操作和每个调度 tick 都会重读该记录)。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。
 
 一条信任规则,直说:hub 用用户的 API key 发送请求,因此明文 key 会经过它的内存。Hub 适合信任机器运维者(和 root)的人;和陌生人共享 VPS 不属于这种情况。
 
 API key 永远不落盘 —— 只存在于服务器内存中,重启后由每个用户的机器重新推送。(邀请码和租户 token 是上述刻意的磁盘例外,为找回而保留;请保管好数据目录。)
+
+## 安全性
+
+给用户的一句话版本:所有常规泄漏路径都已被设计堵死;唯一剩下的,是信任 hub 所在的那台机器。
+
+- **账户登录信息永远不离开你的机器。** hub 只接受 API key(订阅)连接;CLI 账号(OAuth)凭据在协议层即被拒绝,留在你登录它的那台机器上。不存在可泄漏的用户名、密码或会话 cookie。
+- **你的 API key 在 hub 上只存在于内存。** 从不落盘(连接文件不含 key —— 重启后由你自己的机器重新推送),从不进日志(激活结果不含 key 和认证头),也没有任何端点能把它读回 —— `/v1/state` 只报告 key 是否在位。流量全程走运维者的 HTTPS 隧道。
+- **租户 token 被盗 ≠ API key 被盗。** 拿到你的 `awt_...` 的人能管理和触发**你的**连接,但读不到已存储的 key,也无法把它发到自己的服务器 —— 替换连接必须推送新 key,而新 key 会覆盖旧的。token 泄漏了:请运维者 `revoke` 你的邀请码(token 立即失效),拿新码重新配对;你的机器会重新推送一切。
+- **租户之间互相不可见** —— 私有工作区、常数时间哈希比对、每租户 60 请求/分钟限速。
+
+唯一的边界,直说:hub 用你的 key 发送保温请求,明文 key 会经过 hub 进程的内存。运维 hub 的人 —— 或持有该机器 root 的人 —— 能读到它。以上各条都是设计保证;唯独这一条是信任决策,即[工作原理](#工作原理)里的同一条规则:hub 的可信度等于它所在机器的可信度。
+
+建议:
+
+- 用户:委托一把专用的、可随时撤销的 key —— 不要和你其他工具共用那把 —— 有疑虑就轮换。
+- 用户:只通过 hub 的 `https://` 地址连接,绝不裸连 `http://host:port`;保持客户端包更新。
+- 运维者:只通过 cloudflared 隧道(或等效 TLS 反代)暴露 hub,保持默认 `--bind 127.0.0.1`,保管好数据目录(`tenants.json` 明文保存邀请码和租户 token,是刻意设计),保持本包更新。
 
 ## 从拆分前的 `awewarm serve --hub` 升级
 
@@ -117,7 +136,9 @@ API key 永远不落盘 —— 只存在于服务器内存中,重启后由每个
 
 ## 配置
 
-`awewarm-hub config [--data-dir /data]` 持久化本机的默认数据目录(命令行参数只覆盖一次;`--unset` 清除)。默认为 `~/.awewarm-server`,与 awewarm 的单人服务器共用。目录内:`tenants.json`(token 哈希、邀请码、含容量/监听地址/版本/启动时间的 serve 记录)和每个租户一个私有 `tenants/<id>/` 工作区。serve 启动时把容量参数写进 `tenants.json`,同机的一次性 CLI 进程因此读到同一组数字;从未启动过 serve 的数据目录会显示 "caps unknown" 而不是瞎猜。
+`awewarm-hub config` 是设置入口 —— 一个命令管两件事。不带参数时展示当前生效值及其来源:数据目录和三个容量上限。`--data-dir /data` 持久化本机默认数据目录(`--unset` 清除);与容量参数同时给出时,它变为一次性的 registry 选择器(与其它命令上的 `--data-dir` 一致),不再持久化。默认为 `~/.awewarm-server`,与 awewarm 的单人服务器共用。目录内:`tenants.json`(token 哈希、邀请码、含容量/监听地址/版本/启动时间的 serve 记录)和每个租户一个私有 `tenants/<id>/` 工作区。
+
+容量上限 —— `--max-tenants`、`--max-conns-per-tenant`、`--max-machines`(`--reset` 清除,回到 10/5/1 默认)—— 存放在 serve 记录里,所有进程读同一处:serve 参数在启动时盖戳,`config` 随时可改,运行中的 serve 无需重启即采纳(每次租户操作和每个调度 tick 都会重读该记录;一次性 CLI 进程读同一组数字,首次启动 serve 之前设置的值同样生效)。
 
 ## 自更新
 

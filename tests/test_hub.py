@@ -389,6 +389,25 @@ class CrossProcessTests(HubCase):
         joined = remote_client.join(self.url, code)  # against the long-lived serve
         self.assertTrue(joined["token"].startswith("awt_"))
 
+    def test_caps_raised_by_another_process_apply_without_a_restart(self):
+        self.make_hub(max_tenants=1)
+        self.join("alice")
+        with self.assertRaises(remote_client.RemoteError) as ctx:
+            self.join("bob")
+        self.assertIn("hub is full (1 active tenants)", str(ctx.exception))
+        engine.Hub(self.data_dir).set_caps(max_tenants=2)  # `awewarm-hub config --max-tenants 2`
+        self.join("bob")  # the live serve admits the second tenant — no restart
+
+    def test_conn_quota_raised_by_another_process_applies_without_a_restart(self):
+        self.make_hub(max_conns_per_tenant=1)
+        token, _ = self.join("alice")
+        self.push_plan(token, "glm")
+        with self.assertRaises(remote_client.RemoteError) as ctx:
+            self.push_plan(token, "kimi")
+        self.assertIn("quota reached (1 per tenant", str(ctx.exception))
+        engine.Hub(self.data_dir).set_caps(max_conns_per_tenant=2)  # `awewarm-hub config --max-conns-per-tenant 2`
+        self.push_plan(token, "kimi")  # the second connection pushes through on the live serve
+
     def test_revoked_token_stops_working_without_a_restart(self):
         token, tenant_id = self.join("alice")
         engine.Hub(self.data_dir).revoke(self.code_of(tenant_id))  # `awewarm-hub revoke` in another process
@@ -1084,6 +1103,58 @@ class HubCliTests(IsolatedTestCase):
     def test_config_unset_and_data_dir_conflict(self):
         result = invoke(["config", "--data-dir", "/x", "--unset"])
         self.assertNotEqual(result.exit_code, 0)
+
+    def test_config_sets_and_shows_the_caps(self):
+        invoke(["config", "--data-dir", str(self.data_dir)])  # persist it, like a real setup
+        result = invoke(["config", "--max-tenants", "20", "--max-conns-per-tenant", "10", "--max-machines", "2"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Caps now 20 tenants, 10 connections each, 2 machine(s) per invite", result.output)
+        self.assertIn("without a restart", result.output)
+        shown = invoke(["config"])
+        for line in ("max tenants: 20 (saved)", "max conns per tenant: 10 (saved)", "max machines per invite: 2 (saved)"):
+            self.assertIn(line, shown.output)
+        # what serve would launch with: the saved caps win over the code defaults
+        self.assertEqual(engine.Hub(self.data_dir).max_tenants, 20)
+        self.assertEqual(engine.Hub(self.data_dir).max_machines, 2)
+
+    def test_config_reset_clears_the_caps(self):
+        invoke(["config", "--data-dir", str(self.data_dir)])  # persist it, like a real setup
+        invoke(["config", "--max-tenants", "20"])
+        result = invoke(["config", "--reset"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Caps now 10 tenants, 5 connections each, 1 machine(s) per invite", result.output)
+        shown = invoke(["config"])
+        self.assertIn("max tenants: 10 (the default)", shown.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertNotIn("maxTenants", registry.get("serve") or {})
+
+    def test_config_rejects_bad_cap_values_and_combinations(self):
+        result = invoke(["config", "--max-tenants", "0"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("--max-tenants must be greater than 0", result.output)
+        result = invoke(["config", "--max-tenants", "20", "--reset"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("either --reset or cap values", result.output)
+        result = invoke(["config", "--unset", "--max-tenants", "20"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("either --unset or the cap flags", result.output)
+
+    def test_config_data_dir_selects_the_registry_for_cap_changes(self):
+        # with cap flags, --data-dir behaves like on every other command:
+        # a one-shot registry selector, not the machine's persisted default
+        other = Path(self.data_dir).parent / "other-hub"
+        result = invoke(["config", "--data-dir", str(other), "--max-tenants", "7"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(engine.Hub(other).max_tenants, 7)
+        from awewarm import config as cfg
+        self.assertIsNone((cfg.load_config().get("global") or {}).get("serverDataDir"))  # not persisted
+
+    def test_status_shows_pre_set_caps_before_any_launch(self):
+        invoke(["config", "--max-tenants", "20"] + self.dir_opt)
+        result = invoke(["status"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("tenants: 0/20 active", result.output)
+        self.assertIn("never launched", result.output)
 
 
 class ConnectHubTests(IsolatedTestCase):

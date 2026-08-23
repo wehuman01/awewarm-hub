@@ -241,6 +241,18 @@ class Hub:
             for tenant_id, record in fresh["tenants"].items():
                 if tenant_id not in self.tenants:
                     self.tenants[tenant_id] = Tenant(tenant_id, record, self.data_dir / "tenants")
+            # Caps live in the serve record; adopting them here is what lets
+            # `config --max-tenants` retune a running serve without a restart.
+            # Per key: a record without it (never stamped) leaves this
+            # process's constructor values alone.
+            serve = fresh.get("serve") or {}
+            if "maxTenants" in serve:
+                self.max_tenants = serve["maxTenants"]
+            if "maxConnsPerTenant" in serve:
+                self.max_conns_per_tenant = serve["maxConnsPerTenant"]
+            if "maxMachines" in serve:
+                self.max_machines = serve["maxMachines"]
+            self.serve_record = serve
             self._registry_stamp = stamp
 
     def log(self, message):
@@ -267,6 +279,36 @@ class Hub:
         self.log(
             f"serve up on {bind}:{port} — caps {self.max_tenants} tenants, "
             f"{self.max_conns_per_tenant} conns each, default {self.max_machines} machine(s) per invite"
+        )
+
+    def set_caps(self, max_tenants=None, max_conns_per_tenant=None, max_machines=None, reset=False):
+        """Retune the capacity caps (`config --max-tenants ...`) — no restart needed.
+
+        The caps live in the serve record, the same place `serve` stamps them
+        at launch, so every process reads one truth: a running serve adopts
+        the new values on its next registry refresh (every tenant action and
+        each tick pass through one). reset clears the saved caps — enforcement
+        falls back to the code defaults until they are set again.
+        """
+        with self._registry_transaction():
+            record = self.registry.setdefault("serve", {})
+            for key in ("maxTenants", "maxConnsPerTenant", "maxMachines"):
+                if reset:
+                    record.pop(key, None)
+            if max_tenants is not None:
+                record["maxTenants"] = max_tenants
+            if max_conns_per_tenant is not None:
+                record["maxConnsPerTenant"] = max_conns_per_tenant
+            if max_machines is not None:
+                record["maxMachines"] = max_machines
+            self._save()
+        self.serve_record = self.registry["serve"]
+        self.max_tenants = self.serve_record.get("maxTenants", DEFAULT_MAX_TENANTS)
+        self.max_conns_per_tenant = self.serve_record.get("maxConnsPerTenant", DEFAULT_MAX_CONNS_PER_TENANT)
+        self.max_machines = self.serve_record.get("maxMachines", DEFAULT_MAX_MACHINES)
+        self.log(
+            f"caps now {self.max_tenants} tenants, {self.max_conns_per_tenant} conns each, "
+            f"{self.max_machines} machine(s) per invite" + (" (reset)" if reset else "")
         )
 
     # --- pairing ---
@@ -380,7 +422,8 @@ class Hub:
             raise ApiError(
                 403,
                 f"hub is full ({self.max_tenants} active tenants) — "
-                "the operator must revoke an invite first: awewarm-hub list invites --reveal",
+                "the operator must raise the cap (awewarm-hub config --max-tenants) "
+                "or revoke an invite (awewarm-hub list invites --reveal)",
             )
 
     def _invite_of(self, tenant_id):
@@ -624,9 +667,9 @@ def _hash_secret(value):
 
 
 def make_hub_server(data_dir, bind="127.0.0.1", port=8790,
-                    max_tenants=DEFAULT_MAX_TENANTS, max_conns_per_tenant=DEFAULT_MAX_CONNS_PER_TENANT,
-                    max_machines=DEFAULT_MAX_MACHINES):
-    """Build the Hub engine plus its HTTP server. Port 0 picks a free one."""
+                    max_tenants=None, max_conns_per_tenant=None, max_machines=None):
+    """Build the Hub engine plus its HTTP server. Port 0 picks a free one.
+    Caps left as None resolve to the saved serve record, else the defaults."""
     engine = Hub(
         data_dir, max_tenants=max_tenants, max_conns_per_tenant=max_conns_per_tenant,
         max_machines=max_machines,
@@ -658,8 +701,7 @@ def _serve_forever(engine, httpd, tick_seconds):
 
 
 def run(data_dir, bind="127.0.0.1", port=8790, tick_seconds=60,
-        max_tenants=DEFAULT_MAX_TENANTS, max_conns_per_tenant=DEFAULT_MAX_CONNS_PER_TENANT,
-        max_machines=DEFAULT_MAX_MACHINES):
+        max_tenants=None, max_conns_per_tenant=None, max_machines=None):
     """Serve forever: build the hub, announce it, then serve_forever."""
     engine, httpd = make_hub_server(
         data_dir, bind=bind, port=port,
