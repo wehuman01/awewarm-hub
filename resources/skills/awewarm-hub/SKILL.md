@@ -18,7 +18,7 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 | Category | Commands |
 |---|---|
 | Read-only — run freely | `awewarm-hub status [--details]`, `awewarm-hub list users [--api\|--reveal\|--json]`, `awewarm-hub list invites [--reveal\|--token\|--json]`, `awewarm-hub config` (no flags = show resolved data dir), `awewarm-hub self-update --check` |
-| Admin — run on request | `awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]` (mints a one-time code), `awewarm-hub revoke <awi_...>` (kill an invite: pending stops pairing, used suspends its tenant — reversible), `awewarm-hub restore <awi_...>` (undo), `awewarm-hub config --data-dir /data [--unset]`, `awewarm-hub self-update` |
+| Admin — run on request | `awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]` (mints one-time codes; `--count` batch-mints codes that share name, expiry, and machine cap), `awewarm-hub revoke <awi_...>` (kill an invite: pending stops pairing, used suspends its tenant — reversible), `awewarm-hub restore <awi_...>` (undo), `awewarm-hub config --data-dir /data [--unset]`, `awewarm-hub self-update` |
 | Resident — the operator runs it in their own terminal or systemd, never from an agent session | `awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]` |
 
 ## Intent Router
@@ -26,7 +26,8 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 | User intent | Approach |
 |---|---|
 | "Share one server with my team", "给团队开一个共享 hub" | Operator path: `pip install awewarm-hub`, user runs `awewarm-hub serve`, then `invite` per person. Users pair with plain awewarm: `awewarm remote connect <url> --invite awi_...`. |
-| "Invite alice", "邀请一个人" | `awewarm-hub invite --note alice` — hand the printed `awi_...` code to that person promptly and privately. |
+| "Invite alice", "邀请一个人" | `awewarm-hub invite --name alice` — hand the printed `awi_...` code to that person promptly and privately. |
+| "Invite the whole team at once", "批量邀请" | `awewarm-hub invite --name team --count 5` — one code per person, sharing name, expiry (`--expires-in`, default 48h), and machine cap (`--machines`). |
 | "Who has joined? How much are they using?", "谁加入了/用量" | `awewarm-hub status` then `awewarm-hub list users`; `--details` / `--api` for per-connection detail. |
 | "Suspend alice while she's away", "停用一个租户" | `awewarm-hub revoke <her awi_...>` (the USED BY match in `list invites --reveal`) — suspension, not deletion; her token stops authenticating, everything stays on disk, the capacity slot frees. |
 | "Bring her back", "恢复" | `awewarm-hub restore <awi_...>` — re-takes a capacity slot, refuses when the hub is full. Machine pairings were never touched. |
@@ -64,7 +65,7 @@ awewarm-hub status                # afterwards: capacity, liveness
 ### Invite a user, then watch them join
 
 ```bash
-awewarm-hub invite --note alice   # prints awi_... (one use, 48 h)
+awewarm-hub invite --name alice   # prints awi_... (one use, 48 h)
 # alice, on her machine (plain awewarm):
 #   awewarm remote connect https://warm.example.com --invite awi_...
 #   awewarm config set glm --remote

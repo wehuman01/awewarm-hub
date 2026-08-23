@@ -55,7 +55,7 @@ The agent installs the CLI, checks status and tenants read-only, and mints invit
 
 ```bash
 awewarm-hub serve                # listens on 127.0.0.1:8790, data at ~/.awewarm-server
-awewarm-hub invite --note alice  # prints awi_... (one use, 48 h)
+awewarm-hub invite --name alice  # prints awi_... (one use, 48 h)
 awewarm-hub status               # capacity, invite counts, tenants, serve liveness
 ```
 
@@ -91,7 +91,7 @@ WantedBy=default.target
 awewarm-hub serve [--data-dir/--bind/--port]   # the resident hub server
                  [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]
 awewarm-hub status [--details]                 # capacity, invite counts, tenants, serve liveness
-awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]
+awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]
 awewarm-hub list users [--api|--reveal|--json] # tenants: health, usage, machines, joining code
 awewarm-hub list invites [--reveal|--token|--json]  # every minted code: pending/used/revoked/expired, its machine cap, its tenant's token (--token)
 awewarm-hub revoke <awi_...>                   # kill an invite: pending stops pairing, used suspends its tenant (reversible)

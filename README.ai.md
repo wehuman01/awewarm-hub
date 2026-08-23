@@ -157,10 +157,11 @@ For production, point the user at the README's systemd unit and the cloudflared 
 
 ## Step 5: Invite users (operator side) and onboard them (user side)
 
-Mint one invite per person (one use, 48 h by default):
+Mint one invite per person (one use, 48 h by default), or a batch for a team with `--count` (codes share name, expiry, and machine cap):
 
 ```bash
-awewarm-hub invite --note alice
+awewarm-hub invite --name alice
+awewarm-hub invite --name team --count 5 --expires-in 7d
 ```
 
 Hand the printed `awi_...` code to that person promptly and privately. Then each **user**, on their own machine with plain open-source awewarm (they never need this package), runs:
@@ -196,7 +197,7 @@ awewarm-hub self-update --check    # show current/latest version
 Operator actions (run on user request):
 
 ```bash
-awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]   # mint a one-time code
+awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]   # mint one-time code(s)
 awewarm-hub revoke <awi_...>                    # kill an invite: pending stops pairing, used suspends its tenant (reversible)
 awewarm-hub restore <awi_...>                   # undo a revoke
 awewarm-hub config --data-dir /data [--unset]   # persist the default data dir

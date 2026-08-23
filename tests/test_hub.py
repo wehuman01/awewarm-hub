@@ -10,7 +10,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -548,7 +548,7 @@ class HubCliTests(IsolatedTestCase):
         self.dir_opt = ["--data-dir", self.data_dir]
 
     def test_invite_mints_one_use_code(self):
-        result = invoke(["invite"] + self.dir_opt + ["--note", "alice"])
+        result = invoke(["invite"] + self.dir_opt + ["--name", "alice"])
         self.assertEqual(result.exit_code, 0)
         code = next(line.strip() for line in result.output.splitlines() if line.strip().startswith("awi_"))
         self.assertTrue(engine.INVITE_RE.match(code))
@@ -559,7 +559,7 @@ class HubCliTests(IsolatedTestCase):
 
     def test_invite_reports_a_busy_registry_without_a_traceback(self):
         busy = ApiError(503, "hub registry is busy — retry this request")
-        with mock.patch.object(engine.Hub, "mint_invite", side_effect=busy):
+        with mock.patch.object(engine.Hub, "mint_invites", side_effect=busy):
             result = invoke(["invite"] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("could not mint the invite", result.output)
@@ -567,9 +567,52 @@ class HubCliTests(IsolatedTestCase):
         self.assertNotIn("Traceback", result.output)
 
     def test_invite_tells_the_operator_the_user_command(self):
-        result = invoke(["invite"] + self.dir_opt + ["--note", "alice"])
+        result = invoke(["invite"] + self.dir_opt + ["--name", "alice"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("awewarm remote connect <hub-url> --invite awi_", result.output)
+
+    def test_invite_count_mints_codes_sharing_name_expiry_and_cap(self):
+        result = invoke(["invite"] + self.dir_opt + ["--name", "team", "--count", "3", "--machines", "2"])
+        self.assertEqual(result.exit_code, 0)
+        codes = [line.strip() for line in result.output.splitlines() if line.strip().startswith("awi_")]
+        self.assertEqual(len(codes), 3)
+        self.assertEqual(len(set(codes)), 3)
+        self.assertIn("Each user runs", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertEqual(len(registry["invites"]), 3)
+        for entry in registry["invites"].values():
+            self.assertEqual(entry["note"], "team")
+            self.assertEqual(entry["machines"], 2)
+        self.assertEqual(len({entry["expiresAt"] for entry in registry["invites"].values()}), 1)
+
+    def test_invite_count_stays_between_1_and_100(self):
+        for bad in ("0", "101"):
+            result = invoke(["invite"] + self.dir_opt + ["--count", bad])
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("between 1 and 100", result.output)
+
+    def test_invite_expires_in_sets_the_expiry(self):
+        before = datetime.now().astimezone()
+        for raw, delta in (("7d", timedelta(days=7)), ("30m", timedelta(minutes=30))):
+            result = invoke(["invite"] + self.dir_opt + ["--expires-in", raw])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn(f"expires in {raw}", result.output)
+            registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+            entry = next(iter(registry["invites"].values()))
+            expires = schedule.parse_ts(entry["expiresAt"])
+            self.assertGreaterEqual(expires, before + delta)
+            self.assertLessEqual(expires, datetime.now().astimezone() + delta)
+            registry["invites"].clear()  # the loop asserts per-mint expiry
+            Path(self.data_dir, "tenants.json").write_text(json.dumps(registry))
+
+    def test_invite_expires_in_rejects_bad_spellings(self):
+        for bad in ("7", "1w", "48 h"):
+            result = invoke(["invite"] + self.dir_opt + ["--expires-in", bad])
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("must look like 90s, 30m, 12h or 7d", result.output)
+        result = invoke(["invite"] + self.dir_opt + ["--expires-in", "0h"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("greater than 0", result.output)
 
     def test_list_shows_tenants_and_totals(self):
         engine_hub = engine.Hub(self.data_dir)
@@ -933,7 +976,7 @@ class HubCliTests(IsolatedTestCase):
         self.assertIn("no longer addressable", result.output)
 
     def test_invite_stamps_a_machine_cap(self):
-        result = invoke(["invite"] + self.dir_opt + ["--note", "alice", "--machines", "3"])
+        result = invoke(["invite"] + self.dir_opt + ["--name", "alice", "--machines", "3"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("3 machine(s)", result.output)
         registry = json.loads(Path(self.data_dir, "tenants.json").read_text())

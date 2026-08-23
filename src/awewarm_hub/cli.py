@@ -5,10 +5,11 @@ this package — they pair with the open-source awewarm client:
 
   awewarm remote connect <url> --invite awi_..."""
 import json
+import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import click
@@ -230,27 +231,50 @@ def status_command(data_dir, show_details):
         click.echo("\nper-connection detail: awewarm-hub status --details")
 
 
+def _parse_duration(raw):
+    """`--expires-in` syntax, the same spelling aweshare's hub CLI uses:
+    <int><s|m|h|d>, e.g. 90s, 30m, 12h, 7d."""
+    match = re.fullmatch(r"(\d+)([smhd])", raw or "")
+    if not match:
+        die(f"--expires-in must look like 90s, 30m, 12h or 7d, got '{raw}'")
+    scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+    seconds = int(match.group(1)) * scale
+    if seconds <= 0:
+        die("--expires-in must be greater than 0")
+    return timedelta(seconds=seconds)
+
+
 @cli.command("invite")
 @click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved).")
-@click.option("--note", default=None, help="Who this invite is for (shown in list users).")
-@click.option("--expires-hours", "expires_hours", type=int, default=48, show_default=True, help="How long the invite stays usable.")
-@click.option("--machines", "machines", type=int, default=None, help="Machines this invite's token may serve from (default: the serve --max-machines value).")
-def invite_command(data_dir, note, expires_hours, machines):
-    """Mint a one-time pairing invite (recover later with: list invites --reveal)."""
-    if expires_hours <= 0:
-        die("--expires-hours must be greater than 0")
+@click.option("--name", default=None, help="Who these invites are for (shown in list users).")
+@click.option("--count", type=int, default=1, show_default=True, help="How many codes to mint at once (they share name, expiry, and machine cap).")
+@click.option("--expires-in", "expires_in", default="48h", show_default=True, help="How long each code stays usable: <N><s|m|h|d>, e.g. 90s, 30m, 12h, 7d.")
+@click.option("--machines", "machines", type=int, default=None, help="Machines each invite's token may serve from (default: the serve --max-machines value).")
+def invite_command(data_dir, name, count, expires_in, machines):
+    """Mint one-time pairing invites (recover later with: list invites --reveal)."""
+    if not 1 <= count <= 100:
+        die(f"--count must be an integer between 1 and 100, got '{count}'")
     if machines is not None and machines <= 0:
         die("--machines must be greater than 0")
+    ttl = _parse_duration(expires_in)
     engine = Hub(_resolve_server_data_dir(data_dir))
     try:
-        code = engine.mint_invite(note, expires_hours, machines=machines)
+        codes = engine.mint_invites(name, ttl, machines=machines, count=count)
     except ApiError as exc:  # registry busy (serve mid-update) or the save failed
         die(f"could not mint the invite:\n{exc}")
     cap = machines if machines is not None else engine.max_machines
-    click.echo(f"✓ Invite minted{f' for {note}' if note else ''} — one use, expires in {expires_hours} h, {cap} machine(s)")
-    click.echo(f"  {code}")
-    click.echo("  The user runs: awewarm remote connect <hub-url> --invite " + code)
-    click.echo("  Lost it? List every minted code with: awewarm-hub list invites --reveal")
+    if count == 1:
+        click.echo(f"✓ Invite minted{f' for {name}' if name else ''} — one use, expires in {expires_in}, {cap} machine(s)")
+    else:
+        click.echo(f"✓ {count} invites minted{f' for {name}' if name else ''} — one use each, expires in {expires_in}, {cap} machine(s)")
+    for code in codes:
+        click.echo(f"  {code}")
+    if count == 1:
+        click.echo("  The user runs: awewarm remote connect <hub-url> --invite " + codes[0])
+        click.echo("  Lost it? List every minted code with: awewarm-hub list invites --reveal")
+    else:
+        click.echo("  Each user runs: awewarm remote connect <hub-url> --invite <one of the codes above>")
+        click.echo("  Lost one? List every minted code with: awewarm-hub list invites --reveal")
 
 
 @cli.group("list")
@@ -352,7 +376,7 @@ def list_invites_command(data_dir, show_codes, show_tokens, as_json):
         click.echo(json.dumps(out, indent=2))
         return
     if not rows:
-        click.echo("No invites minted yet — mint one with: awewarm-hub invite --note <who>")
+        click.echo("No invites minted yet — mint one with: awewarm-hub invite --name <who>")
         return
     now = datetime.now().astimezone()
     headers = ["NOTE", "CODE", "STATUS", "MACHINES", "EXPIRES", "USED BY", "USED AT", "MINTED"]

@@ -271,25 +271,32 @@ class Hub:
 
     # --- pairing ---
 
-    def mint_invite(self, note=None, ttl_hours=INVITE_TTL_HOURS, machines=None):
-        """One-time pairing code; the code itself is kept so `list invites`
-        can recover it (the tenant token it produces is kept the same way
-        for `--token`).
-        `machines` is the machine cap this authorization carries — the cap is
+    def mint_invites(self, note=None, ttl=timedelta(hours=INVITE_TTL_HOURS), machines=None, count=1):
+        """One-time pairing codes, all in one registry transaction (`invite
+        --count`); each code is kept so `list invites` can recover it (the
+        tenant token each one produces is kept the same way for `--token`).
+        `machines` is the machine cap every code carries — the cap is
         a property of the authorization, so it is stamped here; the default
         is the global one (`serve --max-machines`)."""
-        invite = "awi_" + secrets.token_urlsafe(16)
         now = datetime.now().astimezone()
+        codes = []
         with self._registry_transaction():
-            self.registry["invites"][_hash_secret(invite)] = {
-                "code": invite,
-                "note": note,
-                "machines": machines if machines is not None else self.max_machines,
-                "createdAt": schedule.iso(now),
-                "expiresAt": schedule.iso(now + timedelta(hours=ttl_hours)),
-            }
+            for _ in range(count):
+                invite = "awi_" + secrets.token_urlsafe(16)
+                self.registry["invites"][_hash_secret(invite)] = {
+                    "code": invite,
+                    "note": note,
+                    "machines": machines if machines is not None else self.max_machines,
+                    "createdAt": schedule.iso(now),
+                    "expiresAt": schedule.iso(now + ttl),
+                }
+                codes.append(invite)
             self._save()
-        return invite
+        return codes
+
+    def mint_invite(self, note=None, ttl=timedelta(hours=INVITE_TTL_HOURS), machines=None):
+        """One invite — the common case over mint_invites (same semantics)."""
+        return self.mint_invites(note, ttl=ttl, machines=machines)[0]
 
     def list_invites(self):
         """Rows for `awewarm-hub list invites` — every minted code and its fate."""

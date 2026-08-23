@@ -55,7 +55,7 @@ Agent 会安装 CLI、只读检查状态与租户,并按你的要求签发邀请
 
 ```bash
 awewarm-hub serve                # 监听 127.0.0.1:8790,数据在 ~/.awewarm-server
-awewarm-hub invite --note alice  # 打印 awi_...(一次性,48 小时有效)
+awewarm-hub invite --name alice  # 打印 awi_...(一次性,48 小时有效)
 awewarm-hub status               # 容量、邀请码、租户、serve 存活状态
 ```
 
@@ -91,7 +91,7 @@ WantedBy=default.target
 awewarm-hub serve [--data-dir/--bind/--port]   # 常驻 hub 服务器
                  [--max-tenants/--max-conns-per-tenant/--max-machines/--tick-seconds]
 awewarm-hub status [--details]                 # 容量、邀请码数量、租户、serve 存活状态
-awewarm-hub invite [--note <who>] [--expires-hours N] [--machines N]
+awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]
 awewarm-hub list users [--api|--reveal|--json] # 租户:健康度、用量、机器、加入时用的邀请码
 awewarm-hub list invites [--reveal|--token|--json]  # 所有已签发邀请码:待用/已用/已吊销/已过期,及其机器上限;--token 附带其租户的 token
 awewarm-hub revoke <awi_...>                   # 作废一个邀请码:待用的立即失效,已用的停用其租户(可逆)
