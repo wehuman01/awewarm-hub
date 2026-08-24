@@ -888,6 +888,70 @@ class HubCliTests(IsolatedTestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("--expires-in", result.output)
 
+    def test_invite_ops_accept_the_masked_form(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        masked = code[:8] + "…"  # what `list invites` prints
+        result = invoke(["invite", "extend", masked, "--expires-in", "7d"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("✓ invite extended for alice", result.output)
+        self.assertNotIn(code, result.output)
+        result = invoke(["invite", "rename", masked, "alicia"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("✓ invite renamed to alicia", result.output)
+        self.assertNotIn(code, result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        self.assertEqual(registry["invites"][engine._hash_secret(code)]["note"], "alicia")
+
+    def test_revoke_by_masked_form_and_the_undo_hint_round_trips(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("alice")
+        result = invoke(["invite", "revoke", code[:8] + "…"] + self.dir_opt, input="y\n")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("✓ invite revoked for alice", result.output)
+        self.assertNotIn(code, result.output)  # never the full code, not even the undo hint
+        undo = next(line for line in result.output.splitlines() if "undo:" in line)
+        handle = undo.split()[-1]
+        result = invoke(["invite", "restore", handle] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        row = engine.Hub(self.data_dir).list_invites()[0]
+        self.assertEqual(row["code"], code)
+        self.assertEqual(row["status"], "pending")
+
+    def test_ambiguous_prefix_errors_with_distinguishing_handles(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code_a = engine_hub.mint_invite("linfan")
+        code_b = engine_hub.mint_invite("libo")
+        # force a shared visible prefix: rewrite both stored codes, re-keying
+        # by the new hashes so every later lookup stays consistent
+        invites = engine_hub.registry["invites"]
+        entry_a = invites.pop(engine._hash_secret(code_a))
+        entry_b = invites.pop(engine._hash_secret(code_b))
+        entry_a["code"] = new_a = "awi_F3XWabc" + code_a[11:]
+        entry_b["code"] = new_b = "awi_F3XWabd" + code_b[11:]
+        invites[engine._hash_secret(new_a)] = entry_a
+        invites[engine._hash_secret(new_b)] = entry_b
+        engine_hub._save()
+        result = invoke(["invite", "rename", "awi_F3XW…", "bob"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("matches 2 invites", result.output)
+        self.assertIn("linfan", result.output)
+        self.assertIn("libo", result.output)
+        self.assertNotIn(new_a, result.output)  # candidates stay masked
+        self.assertNotIn(new_b, result.output)
+        self.assertIn("awi_F3XWabc…", result.output)  # each with a usable handle
+        self.assertIn("awi_F3XWabd…", result.output)
+        result = invoke(["invite", "rename", "awi_F3XWabc…", "bob"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        rows = {row["note"]: row for row in engine.Hub(self.data_dir).list_invites()}
+        self.assertEqual(rows["bob"]["code"], new_a)
+
+    def test_unknown_prefix_reports_no_such_invite(self):
+        engine.Hub(self.data_dir).mint_invite("alice")
+        result = invoke(["invite", "rename", "awi_zzzz…", "bob"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("no such invite", result.output)
+
     def test_list_shows_tenants_and_totals(self):
         engine_hub = engine.Hub(self.data_dir)
         invite = engine_hub.mint_invite("alice")

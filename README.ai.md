@@ -208,6 +208,8 @@ awewarm-hub config --max-tenants 20 [--max-conns-per-tenant 10] [--max-machines 
 awewarm-hub self-update                         # upgrade awewarm-hub
 ```
 
+The `<awi_...>` argument accepts the full code or the masked form `list invites` prints (`awi_F3XW…`) whenever it identifies one invite — prefer the masked form so full codes never enter the transcript; an ambiguous prefix errors with each candidate's distinguishing prefix. Pass `--reveal` only when the user asks for a full code to hand off.
+
 User-only command (resident process — the user runs it in their own terminal or systemd):
 
 ```bash
@@ -218,7 +220,7 @@ awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tena
 
 - Never run `serve` from the agent, and never background it — it is a resident process the operator owns.
 - Invite codes are one-time secrets; tenant tokens are live credentials. Never log either beyond what the command prints for handoff, and remind the user to send them over a private channel.
-- Revocation is suspension, not deletion, and `restore` undoes it — prefer `revoke` for anything reversible. Both it and the destructive variant address invite codes (`awi_...`); a tenant's code is the USED BY match in `list invites --reveal`. `revoke --delete` wipes the ledger row instead, and a used code's tenant goes with it (token dead, slot freed, workspace kept on disk) with no way back — run it only when the user explicitly asks to delete outright.
+- Revocation is suspension, not deletion, and `restore` undoes it — prefer `revoke` for anything reversible. Both it and the destructive variant address invite codes (`awi_...`); a tenant's code is the USED BY match in `list invites`. `revoke --delete` wipes the ledger row instead, and a used code's tenant goes with it (token dead, slot freed, workspace kept on disk) with no way back — run it only when the user explicitly asks to delete outright.
 - Users' API keys pass through the hub's RAM. State the trust rule plainly before the user invites strangers.
 - Restarting `serve` is safe (keys re-push automatically); still, coordinate it with the user instead of surprising them.
 - If any command fails, report the exact command and error message. Do not silently retry.

@@ -107,6 +107,8 @@ awewarm-hub config --persist-keys on|off       # 是否允许租户把 API key �
 awewarm-hub self-update [--check]              # 从 PyPI 升级
 ```
 
+四个 `invite` 子命令既接受完整码,也接受 `list invites` 打印的掩码形态(`awi_F3XW…`),只要它能唯一指认一张邀请;歧义前缀会报错并列出各候选的区分前缀。配对仍然只认完整码,前缀不是秘密,日常操作无需复制完整码。
+
 ## 工作原理
 
 每个租户在 `tenants/<id>/` 下拥有私有工作区(连接、状态、内存密钥环 —— 租户之间互相不可见)。`tenants.json` 以明文保存邀请码和租户 token,方便运维者找回已发出去的任意一个(`list invites --reveal` / `--token`);认证时比对 token 的 SHA-256 哈希,因此重启后配对关系依然有效。用户弄丢了 token,运维者把它交回,用户用 `awewarm remote connect <url> --token <它>` 重连 —— 还是同一个租户、同一批连接。任何能读到数据目录的人都能花掉待用邀请码或冒充租户,请妥善保管。邀请码是授权的唯一台账:`revoke awi_...` 作废一个待用码,或停用它产出的租户(token 被拒、连接不再被调度、容量名额释放),`restore awi_...` 反向操作 —— 机器配对不受影响,往返完全无损。`revoke awi_... --delete` 则把该行从台账中彻底删除:不留吊销墓碑,已用的连其租户一并删除(token 失效、容量名额释放、工作区保留在磁盘上),`restore` 无法找回;已吊销的行同样可以 --delete —— 即清理墓碑的场景。机器上限在铸造时盖进邀请码(`invite --machines N`,缺省取 `max-machines` 上限);要给在线用户加机器额度,改 `tenants.json` 里其邀请码行的 `machines` 值(运行中的 serve 会采纳磁盘改动),或直接发新码。三个容量上限都存放在 registry 的 serve 记录里:serve 参数在启动时盖戳,`awewarm-hub config --max-tenants 20` 随时可改 —— 运行中的 serve 无需重启即采纳(每次租户操作和每个调度 tick 都会重读该记录)。轻微的每租户限速(60 请求/分钟)可拦截循环请求的客户端。

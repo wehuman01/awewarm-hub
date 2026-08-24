@@ -347,7 +347,9 @@ def invite_group(ctx, data_dir, name, count, expires_in, machines):
     """Mint one-time pairing invites (recover later with: list invites --reveal).
 
     Bare `awewarm-hub invite [flags]` mints; the subcommands operate on
-    codes already minted.
+    codes already minted. They take the full code or the masked form
+    `list invites` prints (awi_F3XW…) when it identifies one invite —
+    an ambiguous prefix errors with the candidates.
 
     \b
       awewarm-hub invite --name alice               # mint (bare form)
@@ -523,6 +525,48 @@ def list_invites_command(data_dir, show_codes, show_tokens, as_json):
         click.echo("MACHINES 'global' = minted before per-invite caps; follows the live serve --max-machines")
 
 
+def _handle(code, codes):
+    """The shortest prefix identifying `code` among `codes` — what ambiguity
+    errors suggest and undo hints echo, so operating on an invite never
+    requires copying its full code (pairing still demands the full code;
+    a prefix is not a secret)."""
+    for end in range(len("awi_") + 1, len(code) + 1):
+        prefix = code[:end]
+        if not any(other != code and other.startswith(prefix) for other in codes):
+            return prefix + ("…" if end < len(code) else "")
+    return code
+
+
+def _resolve_code(rows, target):
+    """An operator-supplied invite argument → its full code, or die.
+
+    Full codes keep working; anything shorter — the masked `awi_F3XW…`
+    form `list invites` prints is the intended handle — must identify
+    exactly one invite. Ambiguity is an error naming the candidates,
+    never a guess: a wrong pick would suspend the wrong user."""
+    if not target.startswith("awi_"):
+        die(f"no such invite: {target}\nfix: list codes with: awewarm-hub list invites --reveal")
+    prefix = target.removesuffix("…").removesuffix("...")
+    matches = [row for row in rows if row["code"] and row["code"].startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0]["code"]
+    if not matches:
+        die(f"no such invite: {target}\nfix: list codes with: awewarm-hub list invites --reveal")
+    codes = [row["code"] for row in rows if row["code"]]
+    candidate_rows = []
+    for row in matches:
+        expires = schedule.parse_ts(row["expiresAt"])
+        candidate_rows.append([
+            _handle(row["code"], codes),
+            row["note"] or "—",
+            row["status"],
+            expires.strftime("%m-%d %H:%M") if expires else "—",
+        ])
+    click.echo(f"{target} matches {len(matches)} invites — type more characters:")
+    _print_table(["PREFIX", "NOTE", "STATUS", "EXPIRES"], candidate_rows)
+    die("the code must identify one invite — type more characters, as shown above")
+
+
 def _require_code_target(target):
     """The invite code is the only handle for revoke/restore — tenants are
     not addressable directly anymore."""
@@ -540,10 +584,11 @@ def _moved(old, new):
 def _revoke_impl(code, data_dir, hard_delete):
     _require_code_target(code)
     engine = Hub(_resolve_server_data_dir(data_dir))
-    known = {row["code"]: row for row in engine.list_invites() if row["code"]}
-    row = known.get(code)
-    if row is None:
-        die(f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
+    rows = engine.list_invites()
+    code = _resolve_code(rows, code)
+    known = {row["code"]: row for row in rows if row["code"]}
+    row = known[code]
+    handle = _handle(code, list(known))
     note = f" for {row['note']}" if row["note"] else ""
     if hard_delete:
         if row["usedBy"]:
@@ -588,12 +633,13 @@ def _revoke_impl(code, data_dir, hard_delete):
         click.echo(f"✓ invite revoked{note} (it had already expired — the ledger row is kept)")
     else:
         click.echo(f"✓ invite revoked{note} — the code no longer pairs; a fresh one: awewarm-hub invite")
-    click.echo(f"  undo: awewarm-hub invite restore {code}")
+    click.echo(f"  undo: awewarm-hub invite restore {handle}")
 
 
 def _restore_impl(code, data_dir):
     _require_code_target(code)
     engine = Hub(_resolve_server_data_dir(data_dir))
+    code = _resolve_code(engine.list_invites(), code)
     try:
         result = engine.restore(code)
         if result["tenant"]:
@@ -643,6 +689,8 @@ def invite_extend_command(ctx, code, expires_in, data_dir):
     _require_code_target(code)
     ttl = _parse_duration(expires_in)
     engine = Hub(_resolve_server_data_dir(data_dir or ctx.obj))
+    rows = engine.list_invites()
+    code = _resolve_code(rows, code)
     try:
         result = engine.extend_invite(code, ttl)
     except ApiError as exc:  # registry busy, unknown, used, or not far enough out
@@ -651,7 +699,8 @@ def invite_extend_command(ctx, code, expires_in, data_dir):
     expires = schedule.parse_ts(result["expiresAt"])
     click.echo(f"✓ invite extended{note} — expires {expires.strftime('%m-%d %H:%M')} (in {expires_in})")
     if result["revoked"]:
-        click.echo(f"  still revoked — it pairs again after: awewarm-hub invite restore {code}")
+        handle = _handle(code, [row["code"] for row in rows if row["code"]])
+        click.echo(f"  still revoked — it pairs again after: awewarm-hub invite restore {handle}")
     elif result["wasExpired"]:
         click.echo("  it had expired — the code pairs again")
 
@@ -670,6 +719,7 @@ def invite_rename_command(ctx, code, name, data_dir):
     if not name.strip() or "\n" in name:
         die("the name must be a single non-empty line")
     engine = Hub(_resolve_server_data_dir(data_dir or ctx.obj))
+    code = _resolve_code(engine.list_invites(), code)
     try:
         result = engine.rename_invite(code, name.strip())
     except ApiError as exc:  # registry busy or unknown
