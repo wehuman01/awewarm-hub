@@ -27,7 +27,15 @@ jobs:
           if tag != f"v{version}":
               sys.exit(f"tag {tag} does not match package version {version}")
         shell: python
-      - run: pip install -e .
+      - name: Install (engine from its release tag while PyPI lags a lockstep release)
+        shell: bash
+        run: |
+          pip install -e . || {
+            minor=$(python -c "import re; print(re.search(r'awewarm>=([0-9]+\.[0-9]+)', open('pyproject.toml').read()).group(1))")
+            echo "awewarm $minor.* not on PyPI yet; installing engine v$minor.0 from its release tag"
+            pip install "git+https://github.com/wehuman01/awewarm@v$minor.0"
+            pip install -e .
+          }
       - run: python -m unittest discover -s tests
       - name: Extract release notes from CHANGELOG
         run: |

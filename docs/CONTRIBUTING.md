@@ -32,7 +32,10 @@ first.
   version is locked so the wire protocol stays in lockstep with the open-source
   client. Engine internals are imported from `awewarm`, not copied here;
   `server._Handler` is the semi-public extension surface this package builds
-  on. Bump the pin only with an engine release, in the same change.
+  on. Bump the pin only with an engine release, in the same change. CI and
+  release installs fall back to the engine's matching release tag
+  (`git+…@vX.Y.0`) when PyPI lags a lockstep release, so simultaneous tag
+  pushes cannot race the engine's publish.
 - **No secret ever touches disk**: API keys live in server RAM only and are
   re-pushed by each user's machine after a restart. `tenants.json` keeps
   invite codes and tenant tokens in the clear — the two deliberate
