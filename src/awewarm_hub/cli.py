@@ -340,7 +340,7 @@ def _parse_duration(raw):
 @click.option("--data-dir", default=None, help="The hub's data directory (default: ~/.awewarm-server, or the one `config --data-dir` saved); subcommands without their own --data-dir inherit it.")
 @click.option("--name", default=None, help="Who these invites are for (shown in list users).")
 @click.option("--count", type=int, default=1, show_default=True, help="How many codes to mint at once (they share name, expiry, and machine cap).")
-@click.option("--expires-in", "expires_in", default="48h", show_default=True, help="How long each code stays usable: <N><s|m|h|d>, e.g. 90s, 30m, 12h, 7d.")
+@click.option("--expires-in", "expires_in", default="7d", show_default=True, help="How long each code stays usable: <N><s|m|h|d>, e.g. 90s, 30m, 12h, 7d.")
 @click.option("--machines", "machines", type=int, default=None, help="Machines each invite's token may serve from (default: the max-machines cap).")
 @click.pass_context
 def invite_group(ctx, data_dir, name, count, expires_in, machines):

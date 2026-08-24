@@ -10,7 +10,7 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 ## Trust Rules (read this first)
 
 - The hub fires requests with its **users' API keys** — their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root); a shared VPS with strangers is not that. State this before inviting anyone.
-- Invite codes (`awi_...`) are one-time secrets (48 h by default); tenant tokens (`awt_...`) are live credentials. Anyone who can read the data dir can spend a pending invite or act as a tenant — guard it.
+- Invite codes (`awi_...`) are one-time secrets (7 d by default); tenant tokens (`awt_...`) are live credentials. Anyone who can read the data dir can spend a pending invite or act as a tenant — guard it.
 - Restarting `serve` is safe by design: API keys never touch disk; each user's machine re-claims and re-pushes its keys on next contact.
 
 ## Command Safety
@@ -27,7 +27,7 @@ This skill covers **operating** an awewarm-hub server: the resident `serve`, one
 |---|---|
 | "Share one server with my team", "给团队开一个共享 hub" | Operator path: `pip install awewarm-hub`, user runs `awewarm-hub serve`, then `invite` per person. Users pair with plain awewarm: `awewarm remote connect <url> --invite awi_...`. |
 | "Invite alice", "邀请一个人" | `awewarm-hub invite --name alice` — hand the printed `awi_...` code to that person promptly and privately. |
-| "Invite the whole team at once", "批量邀请" | `awewarm-hub invite --name team --count 5` — one code per person, sharing name, expiry (`--expires-in`, default 48h), and machine cap (`--machines`). |
+| "Invite the whole team at once", "批量邀请" | `awewarm-hub invite --name team --count 5` — one code per person, sharing name, expiry (`--expires-in`, default 7d), and machine cap (`--machines`). |
 | "Who has joined? How much are they using?", "谁加入了/用量" | `awewarm-hub status` then `awewarm-hub list users`; `--details` / `--api` for per-connection detail. |
 | "Suspend alice while she's away", "停用一个租户" | `awewarm-hub invite revoke <her awi_...>` (the USED BY match in `list invites --reveal`) — suspension, not deletion; her token stops authenticating, everything stays on disk, the capacity slot frees. |
 | "Bring her back", "恢复" | `awewarm-hub invite restore <awi_...>` — re-takes a capacity slot, refuses when the hub is full. Machine pairings were never touched. |
@@ -68,7 +68,7 @@ awewarm-hub status                # afterwards: capacity, liveness
 ### Invite a user, then watch them join
 
 ```bash
-awewarm-hub invite --name alice   # prints awi_... (one use, 48 h)
+awewarm-hub invite --name alice   # prints awi_... (one use, 7 d)
 # alice, on her machine (plain awewarm):
 #   awewarm remote connect https://warm.example.com --invite awi_...
 #   awewarm config set glm --remote

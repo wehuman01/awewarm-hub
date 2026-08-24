@@ -7,7 +7,7 @@ This document is for AI coding agents. Help the user operate `awewarm-hub`, the 
 - The hub fires requests with its **users' API keys** — their plaintext keys pass through its RAM. Hub for people who trust the machine's operator (and root). Make sure the user understands this before they invite anyone.
 - `awewarm-hub serve` is a **resident process**. Never run or background it from an agent session — it belongs in the user's terminal, tmux, or a systemd unit. The agent's job is everything around it: install, status, invites, tenants.
 - Restarting `serve` is safe by design: API keys never touch disk by default, and each user's machine re-claims and re-pushes its keys on next contact. (Invite codes and tenant tokens are the on-disk exceptions, kept recoverable for the operator — guard the data dir.) One opt-in exception exists: `config --persist-keys on` (default off) lets users store keys in their workspace's `keys.json` (plaintext, 0600) so restarts don't depend on their machine being online — discouraged; switching it back off purges every stored key immediately, and revoking an invite purges that tenant's. Never enable it for the user without stating the plaintext-on-disk trade-off.
-- Invite codes (`awi_...`) are one-time secrets (48 h by default). Anyone who can read the data dir — or sees the code — can use a pending invite. Hand them out promptly and privately.
+- Invite codes (`awi_...`) are one-time secrets (7 d by default). Anyone who can read the data dir — or sees the code — can use a pending invite. Hand them out promptly and privately.
 
 ## Language Behavior
 
@@ -157,7 +157,7 @@ For production, point the user at the README's systemd unit and the cloudflared 
 
 ## Step 5: Invite users (operator side) and onboard them (user side)
 
-Mint one invite per person (one use, 48 h by default), or a batch for a team with `--count` (codes share name, expiry, and machine cap):
+Mint one invite per person (one use, 7 d by default), or a batch for a team with `--count` (codes share name, expiry, and machine cap):
 
 ```bash
 awewarm-hub invite --name alice

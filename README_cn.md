@@ -55,7 +55,7 @@ Agent 会安装 CLI、只读检查状态与租户,并按你的要求签发邀请
 
 ```bash
 awewarm-hub serve                # 监听 127.0.0.1:8790,数据在 ~/.awewarm-server
-awewarm-hub invite --name alice  # 打印 awi_...(一次性,48 小时有效)
+awewarm-hub invite --name alice  # 打印 awi_...(一次性,7 天有效)
 awewarm-hub status               # 容量、邀请码、租户、serve 存活状态
 ```
 

@@ -55,7 +55,7 @@ The agent installs the CLI, checks status and tenants read-only, and mints invit
 
 ```bash
 awewarm-hub serve                # listens on 127.0.0.1:8790, data at ~/.awewarm-server
-awewarm-hub invite --name alice  # prints awi_... (one use, 48 h)
+awewarm-hub invite --name alice  # prints awi_... (one use, 7 d)
 awewarm-hub status               # capacity, invite counts, tenants, serve liveness
 ```
 

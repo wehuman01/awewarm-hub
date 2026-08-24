@@ -45,7 +45,7 @@ INVITE_RE = re.compile(r"^awi_[A-Za-z0-9_-]{16,128}$")
 DEFAULT_MAX_TENANTS = 10
 DEFAULT_MAX_CONNS_PER_TENANT = 5
 DEFAULT_MAX_MACHINES = 1
-INVITE_TTL_HOURS = 48
+INVITE_TTL_DAYS = 7
 # Generous for honest clients (status + sync make a handful of calls an hour)
 # while still stopping a looping client from monopolizing the process.
 HUB_RATE_PER_MINUTE = 60
@@ -379,7 +379,7 @@ class Hub:
 
     # --- pairing ---
 
-    def mint_invites(self, note=None, ttl=timedelta(hours=INVITE_TTL_HOURS), machines=None, count=1):
+    def mint_invites(self, note=None, ttl=timedelta(days=INVITE_TTL_DAYS), machines=None, count=1):
         """One-time pairing codes, all in one registry transaction (`invite
         --count`); each code is kept so `list invites` can recover it (the
         tenant token each one produces is kept the same way for `--token`).
@@ -402,7 +402,7 @@ class Hub:
             self._save()
         return codes
 
-    def mint_invite(self, note=None, ttl=timedelta(hours=INVITE_TTL_HOURS), machines=None):
+    def mint_invite(self, note=None, ttl=timedelta(days=INVITE_TTL_DAYS), machines=None):
         """One invite — the common case over mint_invites (same semantics)."""
         return self.mint_invites(note, ttl=ttl, machines=machines)[0]
 
