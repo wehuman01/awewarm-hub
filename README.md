@@ -94,11 +94,11 @@ awewarm-hub status [--details]                 # capacity, invite counts, tenant
 awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]  # mint (bare form)
 awewarm-hub list users [--api|--reveal|--json] # tenants: health, usage, machines, joining code
 awewarm-hub list invites [--reveal|--token|--json]  # every minted code: pending/used/revoked/expired, its machine cap, its tenant's token (--token)
-awewarm-hub invite rename <awi_...> <name>     # relabel an invite's note; a used one's tenant follows
-awewarm-hub invite revoke <awi_...>            # kill an invite: pending stops pairing, used suspends its tenant (reversible)
-awewarm-hub invite revoke <awi_...> --delete   # wipe the ledger row outright; a used one takes its tenant (irreversible)
-awewarm-hub invite restore <awi_...>           # undo a revoke
-awewarm-hub invite extend <awi_...> --expires-in 7d  # push an expiry out from now; an expired code pairs again
+awewarm-hub invite rename <id|code> <name>     # relabel an invite's note; a used one's tenant follows
+awewarm-hub invite revoke <id|code>            # kill an invite: pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub invite revoke <id|code> --delete   # wipe the ledger row outright; a used one takes its tenant (irreversible)
+awewarm-hub invite restore <id|code>           # undo a revoke
+awewarm-hub invite extend <id|code> --expires-in 7d  # push an expiry out from now; an expired code pairs again
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # capacity caps; a running serve adopts them without a restart
@@ -107,7 +107,7 @@ awewarm-hub config --persist-keys on|off       # may tenants store API keys on t
 awewarm-hub self-update [--check]              # upgrade from PyPI
 ```
 
-The four `invite` subcommands accept the full code or the masked form `list invites` prints (`awi_F3XW…`) whenever it identifies one invite — an ambiguous prefix errors with each candidate's distinguishing prefix. Pairing still demands the full code, so a prefix is not a secret, and day-to-day operations never need the full code.
+The four `invite` subcommands take the invite's id (the ID column `list invites` prints — unique by construction), the full code, or the masked form (`awi_F3XW…`) when it identifies one invite; an ambiguous prefix errors with the candidates. Pairing still demands the full code, so neither an id nor a prefix is a secret, and day-to-day operations never need the full code.
 
 ## How It Works
 

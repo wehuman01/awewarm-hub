@@ -94,11 +94,11 @@ awewarm-hub status [--details]                 # 容量、邀请码数量、租�
 awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]  # 铸造(裸形式)
 awewarm-hub list users [--api|--reveal|--json] # 租户:健康度、用量、机器、加入时用的邀请码
 awewarm-hub list invites [--reveal|--token|--json]  # 所有已签发邀请码:待用/已用/已吊销/已过期,及其机器上限;--token 附带其租户的 token
-awewarm-hub invite rename <awi_...> <name>     # 重命名邀请码的备注;已用的连其租户一并改名
-awewarm-hub invite revoke <awi_...>            # 作废一个邀请码:待用的立即失效,已用的停用其租户(可逆)
-awewarm-hub invite revoke <awi_...> --delete   # 从台账中彻底删除该行;已用的连其租户一并删除(不可逆)
-awewarm-hub invite restore <awi_...>           # 撤销一次 revoke
-awewarm-hub invite extend <awi_...> --expires-in 7d  # 把过期时间从现在起往后推；已过期的码重新可用
+awewarm-hub invite rename <id|code> <name>     # 重命名邀请码的备注;已用的连其租户一并改名
+awewarm-hub invite revoke <id|code>            # 作废一个邀请码:待用的立即失效,已用的停用其租户(可逆)
+awewarm-hub invite revoke <id|code> --delete   # 从台账中彻底删除该行;已用的连其租户一并删除(不可逆)
+awewarm-hub invite restore <id|code>           # 撤销一次 revoke
+awewarm-hub invite extend <id|code> --expires-in 7d  # 把过期时间从现在起往后推；已过期的码重新可用
 awewarm-hub config [--data-dir /data|--unset]  # 本机默认数据目录
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # 容量上限;运行中的 serve 无需重启即采纳
@@ -107,7 +107,7 @@ awewarm-hub config --persist-keys on|off       # 是否允许租户把 API key �
 awewarm-hub self-update [--check]              # 从 PyPI 升级
 ```
 
-四个 `invite` 子命令既接受完整码,也接受 `list invites` 打印的掩码形态(`awi_F3XW…`),只要它能唯一指认一张邀请;歧义前缀会报错并列出各候选的区分前缀。配对仍然只认完整码,前缀不是秘密,日常操作无需复制完整码。
+四个 `invite` 子命令接受邀请的 id(`list invites` 的 ID 列,天然唯一)、完整码,或能唯一指认一张邀请的掩码形态(`awi_F3XW…`);歧义前缀会报错并列出候选。配对仍然只认完整码,id 和前缀都不是秘密,日常操作无需复制完整码。
 
 ## 工作原理
 

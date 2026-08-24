@@ -29,7 +29,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -163,7 +163,7 @@ class Hub:
         try:
             data = json.loads(self.registry_path.read_text())
         except FileNotFoundError:
-            return {"version": 2, "tenants": {}, "invites": {}}
+            return {"version": 3, "tenants": {}, "invites": {}, "inviteSeq": 0}
         except (OSError, ValueError) as exc:
             raise SystemExit(
                 f"awewarm-hub: cannot read {self.registry_path}\n{exc}\n"
@@ -178,19 +178,27 @@ class Hub:
         return data
 
     def _migrate_registry(self):
-        """One-shot v1→v2 upgrade: the invite becomes the only authority on
-        authorization. v1 kept a `suspendedAt` mirror on tenants and allowed
-        invite rows without a plaintext code; v2 derives suspension from the
-        invite's `revokedAt` and addresses revoke/restore by code only. A row
-        that predates stored codes is unaddressable now — it goes, together
+        """Sequential one-shot upgrades at load, newest shape wins.
+
+        v1→v2: the invite becomes the only authority on authorization. v1
+        kept a `suspendedAt` mirror on tenants and allowed invite rows
+        without a plaintext code; v2 derives suspension from the invite's
+        `revokedAt` and addresses revoke/restore by code only. A row that
+        predates stored codes is unaddressable now — it goes, together
         with the tenant it produced (whose token would otherwise live on,
-        beyond revoking); the tenant's workspace stays on disk. Runs under the
-        process lock so a concurrent serve transaction cannot interleave."""
-        if self.registry.get("version", 1) >= 2:
+        beyond revoking); the tenant's workspace stays on disk.
+
+        v2→v3: every invite gains `seq`, the integer operator handle,
+        numbered in mint order (createdAt); `inviteSeq` is a monotonic
+        cursor, so a deleted row's number is never reused. Runs under
+        the process lock so a concurrent serve transaction cannot
+        interleave."""
+        if self.registry.get("version", 1) >= 3:
             return
         try:
             with process_lock(self.registry_lock_path, timeout_seconds=5):
                 fresh = self._load()  # re-read under the lock; another process may have migrated
+                wrote = False
                 if fresh.get("version", 1) < 2:
                     for digest, entry in list(fresh["invites"].items()):
                         if entry.get("code"):
@@ -210,6 +218,18 @@ class Hub:
                             if invite is not None:
                                 invite.setdefault("revokedAt", suspended)
                     fresh["version"] = 2
+                    wrote = True
+                if fresh.get("version", 1) < 3:
+                    ordered = sorted(
+                        fresh["invites"].values(),
+                        key=lambda entry: _mint_order(entry),
+                    )
+                    for seq, entry in enumerate(ordered, start=1):
+                        entry["seq"] = seq
+                    fresh["inviteSeq"] = len(ordered)
+                    fresh["version"] = 3
+                    wrote = True
+                if wrote:
                     _write_json(self.registry_path, fresh)
                 self.registry = fresh
         except LockBusy:
@@ -385,13 +405,17 @@ class Hub:
         tenant token each one produces is kept the same way for `--token`).
         `machines` is the machine cap every code carries — the cap is
         a property of the authorization, so it is stamped here; the default
-        is the global one (`serve --max-machines`)."""
+        is the global one (`serve --max-machines`). Each row also takes the
+        next `seq` from the `inviteSeq` cursor — the integer operator
+        handle, monotonic so a deleted row's number is never reused."""
         now = datetime.now().astimezone()
         codes = []
         with self._registry_transaction():
             for _ in range(count):
                 invite = "awi_" + secrets.token_urlsafe(16)
+                self.registry["inviteSeq"] = self.registry.get("inviteSeq", 0) + 1
                 self.registry["invites"][_hash_secret(invite)] = {
+                    "seq": self.registry["inviteSeq"],
                     "code": invite,
                     "note": note,
                     "machines": machines if machines is not None else self.max_machines,
@@ -422,6 +446,8 @@ class Hub:
             else:
                 status = "pending"
             rows.append({
+                # the integer operator handle; every v3 row carries one
+                "seq": entry.get("seq"),
                 # absent on invites minted before codes were kept on disk
                 "code": entry.get("code"),
                 "note": entry.get("note"),
@@ -804,6 +830,14 @@ class Hub:
 
 def _hash_secret(value):
     return hashlib.sha256((value or "").encode()).hexdigest()
+
+
+def _mint_order(entry):
+    """Sort key for the v3 seq backfill: mint order (createdAt), a row
+    without one — never minted that way, but hand-edits happen — sorts
+    last."""
+    born = schedule.parse_ts(entry.get("createdAt"))
+    return (born is None, born if born is not None else datetime.min.replace(tzinfo=timezone.utc))
 
 
 def make_hub_server(data_dir, bind="127.0.0.1", port=8790,

@@ -573,8 +573,10 @@ class CrossProcessTests(HubCase):
 
 
 class MigrationTests(unittest.TestCase):
-    """v1→v2, once, at load: the invite becomes the only authorization
-    ledger. Crafted by hand-editing tenants.json back into v1 shapes."""
+    """One-shot upgrades at load: v1→v2 made the invite the only
+    authorization ledger; v2→v3 numbers invites with the operator's
+    integer handle. Crafted by hand-editing tenants.json back into old
+    shapes."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -607,7 +609,7 @@ class MigrationTests(unittest.TestCase):
             migrated.registry["invites"][digest]["revokedAt"], "2026-08-01T10:00:00+08:00"
         )
         self.assertTrue(migrated._suspension_of(tenant_id))
-        self.assertEqual(migrated.registry["version"], 2)
+        self.assertEqual(migrated.registry["version"], 3)
 
     def test_a_codeless_invite_row_takes_its_tenant_with_it(self):
         code = self.hub.mint_invite("alice")
@@ -636,17 +638,36 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(migrated.registry["invites"], {})
         self.assertEqual(migrated.registry["tenants"], {})
 
-    def test_migration_runs_once_and_leaves_v2_data_alone(self):
+    def test_migration_runs_once_and_leaves_v3_data_alone(self):
         code = self.hub.mint_invite("alice")
         self.hub.join(code)
         tenant_id = next(iter(self.hub.registry["tenants"]))
         mtime = self.path.stat().st_mtime_ns
 
-        again = engine.Hub(self.data_dir)  # v2 on disk — no rewrite
+        again = engine.Hub(self.data_dir)  # v3 on disk — no rewrite
 
-        self.assertEqual(again.registry["version"], 2)
+        self.assertEqual(again.registry["version"], 3)
         self.assertEqual(self.path.stat().st_mtime_ns, mtime)
         self.assertIn(tenant_id, again.registry["tenants"])
+
+    def test_v3_numbers_existing_invites_in_mint_order(self):
+        first = self.hub.mint_invite("alice")
+        second = self.hub.mint_invite("bob")
+        data = json.loads(self.path.read_text())
+        for entry in data["invites"].values():
+            entry.pop("seq", None)
+        data.pop("inviteSeq", None)
+        data["version"] = 2  # rewind into the pre-id shape
+        self.path.write_text(json.dumps(data))
+
+        migrated = engine.Hub(self.data_dir)
+        invites = migrated.registry["invites"]
+        self.assertEqual(invites[engine._hash_secret(first)]["seq"], 1)
+        self.assertEqual(invites[engine._hash_secret(second)]["seq"], 2)
+        self.assertEqual(migrated.registry["inviteSeq"], 2)
+        self.assertEqual(migrated.registry["version"], 3)
+        third = migrated.mint_invite("carol")  # the cursor continues past the backfill
+        self.assertEqual(invites[engine._hash_secret(third)]["seq"], 3)
 
 
 class PersistKeysTests(HubCase):
@@ -912,6 +933,7 @@ class HubCliTests(IsolatedTestCase):
         self.assertNotIn(code, result.output)  # never the full code, not even the undo hint
         undo = next(line for line in result.output.splitlines() if "undo:" in line)
         handle = undo.split()[-1]
+        self.assertTrue(handle.isdigit())  # the hint is the invite's id
         result = invoke(["invite", "restore", handle] + self.dir_opt)
         self.assertEqual(result.exit_code, 0)
         row = engine.Hub(self.data_dir).list_invites()[0]
@@ -935,16 +957,50 @@ class HubCliTests(IsolatedTestCase):
         result = invoke(["invite", "rename", "awi_F3XW…", "bob"] + self.dir_opt)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("matches 2 invites", result.output)
+        self.assertIn("ID", result.output)  # candidates come with their ids
         self.assertIn("linfan", result.output)
         self.assertIn("libo", result.output)
         self.assertNotIn(new_a, result.output)  # candidates stay masked
         self.assertNotIn(new_b, result.output)
-        self.assertIn("awi_F3XWabc…", result.output)  # each with a usable handle
-        self.assertIn("awi_F3XWabd…", result.output)
-        result = invoke(["invite", "rename", "awi_F3XWabc…", "bob"] + self.dir_opt)
+        result = invoke(["invite", "rename", "1", "bob"] + self.dir_opt)  # linfan was minted first
         self.assertEqual(result.exit_code, 0)
         rows = {row["note"]: row for row in engine.Hub(self.data_dir).list_invites()}
         self.assertEqual(rows["bob"]["code"], new_a)
+        result = invoke(["invite", "rename", "awi_F3XWabc…", "bobby"] + self.dir_opt)  # a longer prefix still works
+        self.assertEqual(result.exit_code, 0)
+        rows = {row["note"]: row for row in engine.Hub(self.data_dir).list_invites()}
+        self.assertEqual(rows["bobby"]["code"], new_a)
+
+    def test_invite_ops_accept_the_id(self):
+        engine_hub = engine.Hub(self.data_dir)
+        code = engine_hub.mint_invite("linfan")
+        engine_hub.mint_invite("libo")
+        listed = invoke(["list", "invites"] + self.dir_opt)
+        self.assertEqual(listed.exit_code, 0)
+        self.assertIn("ID", listed.output)
+        result = invoke(["invite", "extend", "1", "--expires-in", "7d"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("✓ invite extended for linfan", result.output)
+        self.assertNotIn(code, result.output)
+        result = invoke(["invite", "rename", "2", "libo2"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        rows = {row["seq"]: row for row in engine.Hub(self.data_dir).list_invites()}
+        self.assertEqual(rows[2]["note"], "libo2")
+        result = invoke(["invite", "revoke", "1"] + self.dir_opt, input="y\n")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("undo: awewarm-hub invite restore 1", result.output)
+        result = invoke(["invite", "extend", "99", "--expires-in", "7d"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("no invite #99", result.output)
+
+    def test_deleted_invite_numbers_are_not_reused(self):
+        engine_hub = engine.Hub(self.data_dir)
+        first = engine_hub.mint_invite("alice")
+        engine_hub.mint_invite("bob")
+        engine_hub.delete_invite(first)
+        third = engine_hub.mint_invite("carol")
+        rows = {row["code"]: row for row in engine.Hub(self.data_dir).list_invites()}
+        self.assertEqual(rows[third]["seq"], 3)  # the cursor, not max+1
 
     def test_unknown_prefix_reports_no_such_invite(self):
         engine.Hub(self.data_dir).mint_invite("alice")

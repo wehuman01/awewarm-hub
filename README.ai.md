@@ -198,17 +198,18 @@ Operator actions (run on user request):
 
 ```bash
 awewarm-hub invite [--name <who>] [--count N] [--expires-in 30m|12h|7d] [--machines N]   # mint one-time code(s)
-awewarm-hub invite rename <awi_...> <name>      # relabel an invite's note; a used one's tenant follows
-awewarm-hub invite revoke <awi_...>             # kill an invite: pending stops pairing, used suspends its tenant (reversible)
-awewarm-hub invite revoke <awi_...> --delete    # wipe the ledger row outright; a used one takes its tenant (irreversible)
-awewarm-hub invite restore <awi_...>            # undo a revoke
+awewarm-hub invite rename <id|code> <name>      # relabel an invite's note; a used one's tenant follows
+awewarm-hub invite revoke <id|code>             # kill an invite: pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub invite revoke <id|code> --delete    # wipe the ledger row outright; a used one takes its tenant (irreversible)
+awewarm-hub invite restore <id|code>            # undo a revoke
+awewarm-hub invite extend <id|code> --expires-in 7d  # push an expiry out from now; an expired code pairs again
 awewarm-hub config --data-dir /data [--unset]   # persist the default data dir
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant 10] [--max-machines 2] [--reset]
                                                 # capacity caps; a running serve adopts them without a restart
 awewarm-hub self-update                         # upgrade awewarm-hub
 ```
 
-The `<awi_...>` argument accepts the full code or the masked form `list invites` prints (`awi_F3XW…`) whenever it identifies one invite — prefer the masked form so full codes never enter the transcript; an ambiguous prefix errors with each candidate's distinguishing prefix. Pass `--reveal` only when the user asks for a full code to hand off.
+The `<id|code>` argument takes the invite's id (the ID column `list invites` prints — prefer it, it is unique by construction), the full code, or the masked form (`awi_F3XW…`) when it identifies one invite, so full codes never enter the transcript; an ambiguous prefix errors with the candidates' ids. Pass `--reveal` only when the user asks for a full code to hand off.
 
 User-only command (resident process — the user runs it in their own terminal or systemd):
 
@@ -220,7 +221,7 @@ awewarm-hub serve [--data-dir/--bind/--port] [--max-tenants/--max-conns-per-tena
 
 - Never run `serve` from the agent, and never background it — it is a resident process the operator owns.
 - Invite codes are one-time secrets; tenant tokens are live credentials. Never log either beyond what the command prints for handoff, and remind the user to send them over a private channel.
-- Revocation is suspension, not deletion, and `restore` undoes it — prefer `revoke` for anything reversible. Both it and the destructive variant address invite codes (`awi_...`); a tenant's code is the USED BY match in `list invites`. `revoke --delete` wipes the ledger row instead, and a used code's tenant goes with it (token dead, slot freed, workspace kept on disk) with no way back — run it only when the user explicitly asks to delete outright.
+- Revocation is suspension, not deletion, and `restore` undoes it — prefer `revoke` for anything reversible. Both it and the destructive variant address invites by id or code; a tenant's invite is the USED BY match in `list invites`. `revoke --delete` wipes the ledger row instead, and a used code's tenant goes with it (token dead, slot freed, workspace kept on disk) with no way back — run it only when the user explicitly asks to delete outright.
 - Users' API keys pass through the hub's RAM. State the trust rule plainly before the user invites strangers.
 - Restarting `serve` is safe (keys re-push automatically); still, coordinate it with the user instead of surprising them.
 - If any command fails, report the exact command and error message. Do not silently retry.
