@@ -6,6 +6,7 @@ via hashed tokens while API keys stay RAM-only), revocation, and the client
 `remote connect` flow (open-source awewarm) against a live hub.
 """
 import json
+import os
 import tempfile
 import unittest
 import urllib.error
@@ -651,7 +652,8 @@ class PersistKeysTests(HubCase):
         self.assertTrue(keys.exists())
         self.assertEqual(json.loads(keys.read_text()), {"glm": "sk-test"})
         import stat as stat_module
-        self.assertEqual(stat_module.S_IMODE(keys.stat().st_mode), 0o600)
+        if os.name != "nt":  # NTFS has no POSIX mode bits; chmod is advisory only.
+            self.assertEqual(stat_module.S_IMODE(keys.stat().st_mode), 0o600)
         view = remote_client.fetch_state(self.url, token)
         self.assertTrue(view["connections"]["glm"]["keyPersisted"])
 
@@ -1337,11 +1339,11 @@ class HubCliTests(IsolatedTestCase):
         from awewarm import config as cfg
         result = invoke(["config", "--data-dir", "/tmp/persisted"])
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual(
-            (cfg.load_config().get("global") or {}).get("serverDataDir"), "/tmp/persisted"
-        )
+        # storage and display normalize to native separators on Windows
+        stored = (cfg.load_config().get("global") or {}).get("serverDataDir")
+        self.assertEqual(Path(stored), Path("/tmp/persisted"))
         shown = invoke(["config"])
-        self.assertIn("/tmp/persisted", shown.output)
+        self.assertIn(str(Path("/tmp/persisted")), shown.output)
         self.assertIn("set with: awewarm-hub config --data-dir", shown.output)
         invoke(["config", "--unset"])
         shown = invoke(["config"])
