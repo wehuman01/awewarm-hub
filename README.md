@@ -98,6 +98,7 @@ awewarm-hub invite rename <awi_...> <name>     # relabel an invite's note; a use
 awewarm-hub invite revoke <awi_...>            # kill an invite: pending stops pairing, used suspends its tenant (reversible)
 awewarm-hub invite revoke <awi_...> --delete   # wipe the ledger row outright; a used one takes its tenant (irreversible)
 awewarm-hub invite restore <awi_...>           # undo a revoke
+awewarm-hub invite extend <awi_...> --expires-in 7d  # push an expiry out from now; an expired code pairs again
 awewarm-hub config [--data-dir /data|--unset]  # default data dir for this machine
 awewarm-hub config --max-tenants 20 [--max-conns-per-tenant N] [--max-machines N] [--reset]
                                                # capacity caps; a running serve adopts them without a restart

@@ -354,6 +354,7 @@ def invite_group(ctx, data_dir, name, count, expires_in, machines):
       awewarm-hub invite rename awi_... <name>      # relabel one
       awewarm-hub invite revoke awi_... [--delete]  # kill one
       awewarm-hub invite restore awi_...            # undo a revoke
+      awewarm-hub invite extend awi_... --expires-in 7d  # push expiry out
     """
     ctx.obj = data_dir
     if ctx.invoked_subcommand is None:
@@ -626,6 +627,33 @@ def invite_revoke_command(ctx, code, data_dir, hard_delete):
 def invite_restore_command(ctx, code, data_dir):
     """Undo a revoke: a pending invite (awi_...) pairs again, a used one brings its tenant back."""
     _restore_impl(code, data_dir or ctx.obj)
+
+
+@invite_group.command("extend")
+@click.argument("code")
+@click.option("--expires-in", "expires_in", required=True,
+              help="How long the code stays usable from now: <N><s|m|h|d>, e.g. 90s, 30m, 12h, 7d.")
+@click.option("--data-dir", default=None, help="The hub's data directory (defaults to the invite group's --data-dir, then ~/.awewarm-server or the one `config --data-dir` saved).")
+@click.pass_context
+def invite_extend_command(ctx, code, expires_in, data_dir):
+    """Push an invite's (awi_...) expiry out from now — an expired code goes
+    back to pending and pairs again. Only moves the expiry out; a revoked
+    code also needs restore, and a used one is refused (its tenant
+    authenticates by token, expiry no longer applies)."""
+    _require_code_target(code)
+    ttl = _parse_duration(expires_in)
+    engine = Hub(_resolve_server_data_dir(data_dir or ctx.obj))
+    try:
+        result = engine.extend_invite(code, ttl)
+    except ApiError as exc:  # registry busy, unknown, used, or not far enough out
+        die(f"could not extend the invite:\n{exc}")
+    note = f" for {result['note']}" if result["note"] else ""
+    expires = schedule.parse_ts(result["expiresAt"])
+    click.echo(f"✓ invite extended{note} — expires {expires.strftime('%m-%d %H:%M')} (in {expires_in})")
+    if result["revoked"]:
+        click.echo(f"  still revoked — it pairs again after: awewarm-hub invite restore {code}")
+    elif result["wasExpired"]:
+        click.echo("  it had expired — the code pairs again")
 
 
 @invite_group.command("rename")

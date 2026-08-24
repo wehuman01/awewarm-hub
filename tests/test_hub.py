@@ -142,6 +142,37 @@ class PairingTests(HubCase):
         joined = remote_client.join(self.url, invite)
         self.assertTrue(joined["token"].startswith("awt_"))
 
+    def test_extended_expired_invite_pairs_again(self):
+        invite = self.hub.mint_invite("alice")
+        digest = engine._hash_secret(invite)
+        self.hub.registry["invites"][digest]["expiresAt"] = schedule.iso(
+            datetime.now().astimezone() - timedelta(minutes=1)
+        )
+        result = self.hub.extend_invite(invite, timedelta(days=7))
+        self.assertTrue(result["wasExpired"])
+        self.assertFalse(result["revoked"])
+        row = next(row for row in self.hub.list_invites() if row["code"] == invite)
+        self.assertEqual(row["status"], "pending")  # status derives from expiresAt
+        joined = remote_client.join(self.url, invite)
+        self.assertTrue(joined["token"].startswith("awt_"))
+
+    def test_extend_refuses_a_used_invite(self):
+        _, tenant_id = self.join("alice")
+        code = self.code_of(tenant_id)
+        with self.assertRaises(ApiError) as ctx:
+            self.hub.extend_invite(code, timedelta(days=7))
+        self.assertIn("already used", str(ctx.exception))
+
+    def test_extend_only_pushes_the_expiry_out(self):
+        invite = self.hub.mint_invite("alice", ttl=timedelta(days=7))
+        with self.assertRaises(ApiError) as ctx:
+            self.hub.extend_invite(invite, timedelta(days=1))
+        self.assertIn("only pushes the expiry out", str(ctx.exception))
+        self.hub.extend_invite(invite, timedelta(days=14))
+        digest = engine._hash_secret(invite)
+        expires = schedule.parse_ts(self.registry()["invites"][digest]["expiresAt"])
+        self.assertGreaterEqual(expires, datetime.now().astimezone() + timedelta(days=13))
+
     def test_revoke_flags_an_expired_entry(self):
         invite = self.hub.mint_invite("alice")
         digest = engine._hash_secret(invite)
@@ -817,6 +848,45 @@ class HubCliTests(IsolatedTestCase):
         result = invoke(["invite"] + self.dir_opt + ["--expires-in", "0h"])
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("greater than 0", result.output)
+
+    def test_invite_extend_pushes_the_expiry_out(self):
+        result = invoke(["invite"] + self.dir_opt + ["--expires-in", "1h"])
+        code = next(line.strip() for line in result.output.splitlines() if line.strip().startswith("awi_"))
+        before = datetime.now().astimezone()
+        result = invoke(["invite", "extend", code, "--expires-in", "7d"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("✓ invite extended", result.output)
+        self.assertIn("(in 7d)", result.output)
+        registry = json.loads(Path(self.data_dir, "tenants.json").read_text())
+        entry = registry["invites"][engine._hash_secret(code)]
+        expires = schedule.parse_ts(entry["expiresAt"])
+        self.assertGreaterEqual(expires, before + timedelta(days=7))
+
+    def test_invite_extend_revives_an_expired_code(self):
+        hub = engine.Hub(self.data_dir)
+        code = hub.mint_invite("alice")
+        digest = engine._hash_secret(code)
+        hub.registry["invites"][digest]["expiresAt"] = schedule.iso(
+            datetime.now().astimezone() - timedelta(minutes=1)
+        )
+        hub._save()
+        result = invoke(["invite", "extend", code, "--expires-in", "7d"] + self.dir_opt)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("it had expired — the code pairs again", result.output)
+        row = next(row for row in engine.Hub(self.data_dir).list_invites() if row["code"] == code)
+        self.assertEqual(row["status"], "pending")
+
+    def test_invite_extend_refuses_a_used_invite_and_requires_a_duration(self):
+        hub = engine.Hub(self.data_dir)
+        code = hub.mint_invite("alice")
+        hub.registry["invites"][engine._hash_secret(code)]["usedBy"] = "t_86ea5e12"
+        hub._save()
+        result = invoke(["invite", "extend", code, "--expires-in", "7d"] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("already used", result.output)
+        result = invoke(["invite", "extend", code] + self.dir_opt)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("--expires-in", result.output)
 
     def test_list_shows_tenants_and_totals(self):
         engine_hub = engine.Hub(self.data_dir)

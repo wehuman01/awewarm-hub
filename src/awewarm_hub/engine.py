@@ -584,6 +584,38 @@ class Hub:
         self.log(f"invite restored ({entry.get('note') or 'no note'})")
         return {"ok": True, "tenant": used_by}
 
+    def extend_invite(self, code, ttl):
+        """Push an invite's expiry out from now (`invite extend awi_...
+        --expires-in`). Status derives from expiresAt, so an expired code
+        is pending again the moment this lands and pairs anew; a revoked
+        one stays revoked until `restore`. Expiry only gates pairing, so
+        a used invite refuses — its tenant authenticates by token."""
+        with self._registry_transaction():
+            entry = self.registry["invites"].get(_hash_secret(code))
+            if entry is None:
+                raise ApiError(404, f"no such invite: {code}\nfix: list codes with: awewarm-hub list invites --reveal")
+            if entry.get("usedBy"):
+                raise ApiError(409, "invite already used — expiry no longer applies; its tenant authenticates by token")
+            now = datetime.now().astimezone()
+            current = schedule.parse_ts(entry.get("expiresAt"))
+            if current is not None and current >= now + ttl:
+                raise ApiError(
+                    409,
+                    f"invite expires {entry['expiresAt']} — extend only pushes the expiry out; "
+                    "revoke the code and mint a fresh one to shorten it",
+                )
+            was_expired = current is not None and current <= now
+            entry["expiresAt"] = schedule.iso(now + ttl)
+            self._save()
+        self.log(f"invite extended to {entry['expiresAt']} ({entry.get('note') or 'no note'})")
+        return {
+            "ok": True,
+            "note": entry.get("note"),
+            "expiresAt": entry["expiresAt"],
+            "wasExpired": was_expired,
+            "revoked": bool(entry.get("revokedAt")),
+        }
+
     def rename_invite(self, code, note):
         """Set an invite's note (`rename awi_... <name>`).
 
