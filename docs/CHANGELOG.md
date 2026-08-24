@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.2
+
+Mint's `--expires-in` default moves from 48 h to 7 days — long enough that a code handed over this morning still pairs on Monday, short enough that it stays a one-time secret; any explicit duration overrides it as before.
+
+The four invite subcommands (`revoke`, `restore`, `extend`, `rename`) take three spellings for their target, most convenient first: the invite's **id** — registry v3 stamps every invite at mint with a plain integer from a monotonic cursor (`inviteSeq`), so a deleted row's number is never reused and existing registries backfill once in mint order under the process lock; `list invites` gains an ID column — or the full code, or the masked form `list invites` prints (`awi_F3XW…`) whenever it identifies exactly one invite. An ambiguous prefix is an error naming each candidate's distinguishing prefix, never a guess (a wrong pick would suspend the wrong user). Undo hints echo the id, so day-to-day operation never pastes a full code into the transcript; pairing still demands the full code, so a prefix is not a secret.
+
 ## v0.6.1
 
 `invite extend awi_... --expires-in 7d` pushes an invite's expiry out from now, answering both "these codes expire too soon" and "this one already expired": expiry is derived, never stored as a state, so an expired code is pending again the moment the new timestamp lands and pairs anew — no re-mint, no re-sending codes. The verb stays honest to its name: it only moves the expiry out (shortening is refused with the revoke-and-mint-a-fresh-code pointer), a used invite is refused because expiry only gates pairing and its tenant authenticates by token, and a revoked code stays revoked across the extend — the hint to `restore` rides along. The duration spells exactly like mint's `--expires-in` and is required (no silent 48h default on a code the operator believes they placed).
