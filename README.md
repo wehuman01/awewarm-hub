@@ -1,6 +1,6 @@
 <div align="center">
   <img src="logo/hero2.webp" alt="awewarm-hub" width="860">
-  <h1>awewarm-hub: Multi-tenant Hub Server</h1>
+  <h1>awewarm-hub: Multi-tenant Hub Server <a href="https://github.com/Webioinfo01/aweskill"><img src="https://raw.githubusercontent.com/Webioinfo01/aweskill/main/logo/aweskill-badge2.svg" alt="aweskill companion"></a></h1>
   <p><strong>One always-on box keeps a whole team's subscription windows warm.</strong></p>
   <p>The multi-tenant hub server for <a href="https://github.com/wehuman01/awewarm">awewarm</a>: many users, one server, one-time invites — each user's secrets staying on their own machine.</p>
   <p>

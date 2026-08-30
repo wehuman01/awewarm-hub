@@ -1,6 +1,6 @@
 <div align="center">
   <img src="logo/hero2.webp" alt="awewarm-hub" width="860">
-  <h1>awewarm-hub:多租户 Hub 服务器</h1>
+  <h1>awewarm-hub:多租户 Hub 服务器 <a href="https://github.com/Webioinfo01/aweskill"><img src="https://raw.githubusercontent.com/Webioinfo01/aweskill/main/logo/aweskill-badge2.svg" alt="aweskill companion"></a></h1>
   <p><strong>一台常驻服务器，让整个团队的订阅窗口一直是热的。</strong></p>
   <p><a href="https://github.com/wehuman01/awewarm">awewarm</a> 的多租户 hub 服务器：多个用户、一台服务器、一次性邀请码 —— 每个用户的密钥始终留在自己的机器上。</p>
   <p>
