@@ -167,7 +167,7 @@ python3 -m unittest discover -s tests
 
 源码仓库为 [wehuman01/awewarm-hub](https://github.com/wehuman01/awewarm-hub)(开源,MPL-2.0);tag 推送时自动构建并发布到 PyPI。工程准则见 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md),发布历史见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
-## 支持
+## 赞助与支持
 
 如果 awewarm-hub 保住了你们团队的配额,欢迎支持:
 
