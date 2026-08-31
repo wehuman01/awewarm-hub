@@ -109,9 +109,10 @@ Caps left unset resolve to the values `awewarm-hub config` saved, else the
 defaults, and can be retuned while serving: awewarm-hub config --max-tenants 20
 (a running serve adopts them without a restart). Users pair with: awewarm
 remote connect <url> --invite <code from `awewarm-hub invite`>. Invite codes
-and tenant tokens are the only secrets on disk — kept in the clear so the
-operator can recover either one (list invites --reveal / --token); API keys
-live in server RAM only.
+and tenant tokens are kept in the clear so the operator can recover either
+one (list invites --reveal / --token). API keys live in server RAM by default;
+`config --persist-keys on` merely allows an owner-confirmed connection to use
+plaintext keys.json.
     """
     for name, value in (
         ("--max-tenants", max_tenants),

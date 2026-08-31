@@ -7,8 +7,9 @@ construction. Pairing flows through one-time invites minted by the operator
 tenants.json keeps invite codes and tenant tokens in the clear so the
 operator can recover either one already sent (`awewarm-hub list invites
 --reveal` / `--token`); authentication compares the token's SHA-256 hash.
-API keys still never touch disk, and the pairings survive a restart without
-waiting for every user to come back online.
+API keys stay in RAM by default, while an operator-enabled and owner-confirmed
+`persistKey` may store them in a tenant's plaintext 0600 keys.json. Pairings
+survive a restart without waiting for every user to come back online.
 
 This module leans on awewarm's semi-public server surface (WarmServer,
 ApiError, schedule, the config/locking helpers). Its dependency pins this
@@ -20,6 +21,7 @@ stamped into the registry at launch so `awewarm-hub status` can report
 them, and the machine cap they set is the default stamped into each new
 invite (`invite --machines` overrides per code).
 """
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -30,13 +32,12 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from awewarm import __version__ as awewarm_version, schedule
 from awewarm.config import append_log, conn_state, _write_json
 from awewarm.locking import LockBusy, process_lock
-from awewarm.server import ApiError, WarmServer
+from awewarm.server import ApiError, BoundedThreadingHTTPServer, WarmServer
 
 from . import __version__
 from .handler import HubHandler
@@ -49,6 +50,8 @@ INVITE_TTL_DAYS = 7
 # Generous for honest clients (status + sync make a handful of calls an hour)
 # while still stopping a looping client from monopolizing the process.
 HUB_RATE_PER_MINUTE = 60
+HUB_ACTIVATION_WORKERS = 4
+HUB_TENANT_TICK_WORKERS = 4
 
 
 class Tenant:
@@ -60,12 +63,14 @@ class Tenant:
     for spinning up every tenant's files.
     """
 
-    def __init__(self, tenant_id, record, tenants_root):
+    def __init__(self, tenant_id, record, tenants_root, activation_pool=None):
         self.id = tenant_id
         self.record = record  # the registry entry: tokenHash, note, createdAt, lastSeenAt, usage, machines
         self.workspace_dir = Path(tenants_root) / tenant_id
         self.requests = deque()  # monotonic timestamps, the rate-limit window
         self.pending_seen = None  # RAM-only lastSeenAt stamp; tick()'s flush persists it
+        self.activation_pool = activation_pool
+        self._warm_lock = threading.Lock()
         self._warm = None
 
     @property
@@ -78,9 +83,12 @@ class Tenant:
 
     @property
     def warm(self):
-        if self._warm is None:
-            self._warm = WarmServer(self.workspace_dir)
-        return self._warm
+        with self._warm_lock:
+            if self._warm is None:
+                self._warm = WarmServer(
+                    self.workspace_dir, activation_pool=self.activation_pool
+                )
+            return self._warm
 
     def release_workspace(self):
         """Drop the RAM workspace — the config/state mirror and the API-key
@@ -93,7 +101,8 @@ class Tenant:
         the tick skips the tenant. Restore needs no counterpart: `warm`
         reloads lazily, and keys return the way they do after a serve
         restart — the user's machine re-pushes them on its sync cycle."""
-        self._warm = None
+        with self._warm_lock:
+            self._warm = None
 
     def drop_persisted_keys(self):
         """Purge this tenant's keys.json (the owner-opt-in on-disk keyring).
@@ -102,8 +111,10 @@ class Tenant:
         deleted. A loaded workspace purges through WarmServer so its RAM
         mirror cannot rewrite the file afterwards; an unloaded one just
         loses the file."""
-        if self._warm is not None:
-            self._warm.purge_persisted_keys(self.id)
+        with self._warm_lock:
+            warm = self._warm
+        if warm is not None:
+            warm.purge_persisted_keys(self.id)
         else:
             (self.workspace_dir / "keys.json").unlink(missing_ok=True)
 
@@ -116,9 +127,9 @@ class Hub:
     tenants.json keeps invite codes and tenant tokens in the clear so the
     operator can recover either one already sent (`awewarm-hub list invites
     --reveal` / `--token`); authentication compares the token's SHA-256
-    hash. API keys still never touch disk, and unlike single-tenant mode
-    the pairings survive a restart without waiting for every user to come
-    back online.
+    hash. API keys stay in RAM unless both the operator and owner opt into
+    keys.json persistence; unlike single-tenant mode the pairings survive a
+    restart without waiting for every user to come back online.
     """
 
     def __init__(self, data_dir, max_tenants=None, max_conns_per_tenant=None, max_machines=None):
@@ -127,6 +138,13 @@ class Hub:
         self.registry_lock_path = self.data_dir / "tenants.lock"
         self.log_path = self.data_dir / "awewarm-hub.log"
         self.lock = threading.RLock()
+        # Every tenant shares one activation budget. Coordinating tenant ticks
+        # concurrently must not multiply the number of CLI subprocesses by the
+        # tenant count.
+        self.activation_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=HUB_ACTIVATION_WORKERS,
+            thread_name_prefix="awewarm-hub-activation",
+        )
         self.registry = self._load()
         self._migrate_registry()
         # Serve always passes its flag values; one-shot CLI processes
@@ -152,7 +170,9 @@ class Hub:
         self.persist_keys = bool(self.serve_record.get("persistKeys"))
         self._registry_stamp = self._stamp()
         self.tenants = {
-            tenant_id: Tenant(tenant_id, record, self.data_dir / "tenants")
+            tenant_id: Tenant(
+                tenant_id, record, self.data_dir / "tenants", self.activation_pool
+            )
             for tenant_id, record in self.registry["tenants"].items()
         }
 
@@ -293,7 +313,9 @@ class Hub:
                     self.tenants.pop(tenant_id, None)
             for tenant_id, record in fresh["tenants"].items():
                 if tenant_id not in self.tenants:
-                    self.tenants[tenant_id] = Tenant(tenant_id, record, self.data_dir / "tenants")
+                    self.tenants[tenant_id] = Tenant(
+                        tenant_id, record, self.data_dir / "tenants", self.activation_pool
+                    )
             # Caps live in the serve record; adopting them here is what lets
             # `config --max-tenants` retune a running serve without a restart.
             # Per key: a record without it (never stamped) leaves this
@@ -499,7 +521,12 @@ class Hub:
                 "usage": {"day": None, "today": 0, "total": 0},
                 "machines": [machine] if machine else [],
             }
-            self.tenants[tenant_id] = Tenant(tenant_id, self.registry["tenants"][tenant_id], self.data_dir / "tenants")
+            self.tenants[tenant_id] = Tenant(
+                tenant_id,
+                self.registry["tenants"][tenant_id],
+                self.data_dir / "tenants",
+                self.activation_pool,
+            )
             entry["usedBy"] = tenant_id
             entry["usedAt"] = schedule.iso(now)
             self._save()
@@ -748,6 +775,27 @@ class Hub:
                     f"connection quota reached ({self.max_conns_per_tenant} per tenant on this hub)",
                 )
 
+    def put_connection(self, tenant, conn_id, body):
+        """Re-authorize, apply quota, and insert as one transaction.
+
+        Re-checking here closes the gap between HTTP authentication and a
+        concurrent operator revoke or persistence-policy change.
+        """
+        with self._registry_transaction():
+            if tenant.id not in self.tenants or self._suspension_of(tenant.id):
+                raise ApiError(401, "hub token was revoked during this request")
+            if body.get("persistKey") and not self.persist_keys:
+                raise ApiError(
+                    403,
+                    "this hub does not allow storing API keys on its disk — the operator "
+                    "can allow it (awewarm-hub config --persist-keys on); otherwise keep "
+                    "the key RAM-only: awewarm config set <id> --persist-key off",
+                )
+            warm = tenant.warm
+            with warm.lock:
+                self.check_conn_quota(tenant, conn_id)
+                return warm.put_connection(conn_id, body)
+
     def _bump_usage(self, tenant, count):
         with self._registry_transaction():
             if tenant.id not in self.tenants:
@@ -811,8 +859,22 @@ class Hub:
                 self.tenants[tenant_id] for tenant_id in sorted(self.tenants)
                 if not self._suspension_of(tenant_id)
             ]
-        for tenant in tenants:
-            result = tenant.warm.tick(now_fn=now_fn)
+        if not tenants:
+            return {"fired": fired, "held": held}
+        # Tenant ticks coordinate in parallel while every underlying
+        # activation still runs through the one shared four-worker pool.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(HUB_TENANT_TICK_WORKERS, len(tenants)),
+            thread_name_prefix="awewarm-hub-tenant",
+        ) as tenant_pool:
+            jobs = [tenant_pool.submit(tenant.warm.tick, now_fn=now_fn) for tenant in tenants]
+            results = []
+            for tenant, job in zip(tenants, jobs):
+                try:
+                    results.append((tenant, job.result()))
+                except Exception as exc:
+                    self.log(f"{tenant.id}: tick crashed: {exc!r}")
+        for tenant, result in results:
             fired += result["fired"]
             held.extend(result["held"])
             if result["fired"]:
@@ -849,8 +911,7 @@ def make_hub_server(data_dir, bind="127.0.0.1", port=8790,
         max_machines=max_machines,
     )
     handler = type("BoundHandler", (HubHandler,), {"hub": engine})
-    httpd = ThreadingHTTPServer((bind, port), handler)
-    httpd.daemon_threads = True
+    httpd = BoundedThreadingHTTPServer((bind, port), handler)
     return engine, httpd
 
 
@@ -885,7 +946,12 @@ def run(data_dir, bind="127.0.0.1", port=8790, tick_seconds=60,
     actual = httpd.server_address[1]
     engine.record_launch(bind, actual)
     print(f"awewarm-hub serve {__version__} (engine awewarm {awewarm_version})")
-    print(f"  data dir: {engine.data_dir}  (config/state/log — no secrets ever written to disk)")
+    print(f"  data dir: {engine.data_dir}")
+    print("  pairing secrets: plaintext tenants.json (0600; operator recovery)")
+    print(
+        "  delegated keys: "
+        + ("owner-opted plaintext keys.json allowed" if engine.persist_keys else "RAM-only; disk persistence disabled")
+    )
     print(f"  listening: http://{bind}:{actual}")
     print(f"  hub mode: {len(engine.tenants)} of max {engine.max_tenants} tenants, "
           f"{engine.max_conns_per_tenant} connections each")

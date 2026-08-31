@@ -8,6 +8,7 @@ via hashed tokens while API keys stay RAM-only), revocation, and the client
 import json
 import os
 import tempfile
+import threading
 import unittest
 import urllib.error
 import urllib.request
@@ -267,6 +268,35 @@ class IsolationTests(HubCase):
             self.push_plan(alice, "kimi")
         self.assertIn("quota", str(ctx.exception))
         self.push_plan(alice, "glm")  # replacing an existing id never counts
+
+    def test_connection_quota_check_and_insert_are_atomic(self):
+        self.make_hub(max_conns_per_tenant=1)
+        _, tenant_id = self.join("alice")
+        tenant = self.hub.tenants[tenant_id]
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def synchronized_put(conn_id):
+            try:
+                barrier.wait(timeout=2)
+                self.hub.put_connection(tenant, conn_id, {
+                    "connection": plan_connection(),
+                    "apiKey": "sk-test",
+                    "timezone": TZ,
+                })
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=synchronized_put, args=(conn_id,))
+                   for conn_id in ("one", "two")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+        self.assertEqual(len(tenant.warm.config["connections"]), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ApiError)
+
 
 
 class LifecycleTests(HubCase):
@@ -784,6 +814,47 @@ class UsageTests(HubCase):
         self.assertEqual(usage["today"], 1)
         self.assertEqual(usage["total"], 1)
         self.assertEqual(self.registry()["tenants"][bob_id]["usage"]["total"], 0)
+
+    def test_due_tenants_activate_concurrently_under_the_global_cap(self):
+        alice, _ = self.join("alice")
+        bob, _ = self.join("bob")
+        self.push_plan(alice)
+        self.push_plan(bob)
+        barrier = threading.Barrier(2)
+        active = 0
+        peak = 0
+        guard = threading.Lock()
+
+        def send(*_args, **_kwargs):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            try:
+                barrier.wait(timeout=2)
+                return {"ok": True, "detail": ""}
+            finally:
+                with guard:
+                    active -= 1
+
+        with mock.patch("awewarm.transport.send_activation", side_effect=send):
+            result = self.hub.tick(now_fn=lambda conn: at("03:00", seconds=30))
+        self.assertEqual(result["fired"], 2)
+        self.assertEqual(peak, 2)
+
+    @mock.patch("awewarm.transport.send_activation", return_value={"ok": True, "detail": ""})
+    def test_one_tenant_tick_failure_does_not_skip_the_others(self, send):
+        alice, alice_id = self.join("alice")
+        bob, bob_id = self.join("bob")
+        self.push_plan(alice)
+        self.push_plan(bob)
+        with mock.patch.object(
+            self.hub.tenants[alice_id].warm, "tick", side_effect=RuntimeError("boom")
+        ):
+            result = self.hub.tick(now_fn=lambda conn: at("03:00", seconds=30))
+        self.assertEqual(result["fired"], 1)
+        self.assertEqual(self.registry()["tenants"][bob_id]["usage"]["total"], 1)
+        self.assertIn(f"{alice_id}: tick crashed", (self.data_dir / "awewarm-hub.log").read_text())
 
     @mock.patch("awewarm.transport.send_activation", return_value={"ok": True, "detail": ""})
     def test_manual_run_counts_as_usage(self, send):

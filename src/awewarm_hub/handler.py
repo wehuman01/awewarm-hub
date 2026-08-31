@@ -42,15 +42,7 @@ class HubHandler(_Handler):
         return {"ok": True, "released": False}
 
     def _put_connection(self, warm, tenant, conn_id, body):
-        if body.get("persistKey") and not self.hub.persist_keys:
-            raise ApiError(
-                403,
-                "this hub does not allow storing API keys on its disk — the operator "
-                "can allow it (awewarm-hub config --persist-keys on); otherwise keep "
-                "the key RAM-only: awewarm config set <id> --persist-key off",
-            )
-        self.hub.check_conn_quota(tenant, conn_id)
-        return warm.put_connection(conn_id, body)
+        return self.hub.put_connection(tenant, conn_id, body)
 
     def _run_now(self, warm, tenant, conn_id, body):
         return self.hub.run_now(tenant, conn_id, bool(body.get("resetDue")), bool(body.get("allowAutoDisabled")))
