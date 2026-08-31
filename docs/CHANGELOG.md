@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.5
+
+**Tenant ticks run in parallel, but every activation still shares one bounded pool.** A hub with five tenants no longer waits for each full tick cycle before starting the next — up to four tenants tick concurrently (each tenant's own `tick` submits work into the hub's shared four-worker `activation_pool`), so a slow endpoint on one connection no longer stalls the other tenants' due slots. The shared pool also bounds the total number of concurrent CLI subprocesses regardless of tenant count.
+
+`put_connection` now re-checks the tenant's suspension and the hub's `persistKeys` policy inside the registry transaction — a concurrent `revoke` or operator config change can no longer slip between the HTTP auth layer and the config write.
+
 ## v0.6.2
 
 Mint's `--expires-in` default moves from 48 h to 7 days — long enough that a code handed over this morning still pairs on Monday, short enough that it stays a one-time secret; any explicit duration overrides it as before.
