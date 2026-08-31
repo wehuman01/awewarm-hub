@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0
+
+**The hub has a browser front door.** `GET /` from a browser (an HTML `Accept` header) now serves a landing page — bilingual, `?lang=en|zh` or the browser's own `Accept-Language` — explaining what awewarm is, why the window needs keeping warm, and the copy-paste `awewarm remote connect https://<host> --invite awi_…` line with the trust boundary spelled out. The `<host>` in that command is the address the visitor reached the hub by (taken from the request's own Host header, HTML-escaped), so it is always the URL that actually worked.
+
+API clients see none of this: without `text/html` in `Accept`, `/` answers the same JSON 401 it always did, and `/healthz` plus every `/v1/*` route are untouched. The page carries no JavaScript and no third-party assets — one HTML response, `no-store`.
+
 ## v0.6.5
 
 **Tenant ticks run in parallel, but every activation still shares one bounded pool.** A hub with five tenants no longer waits for each full tick cycle before starting the next — up to four tenants tick concurrently (each tenant's own `tick` submits work into the hub's shared four-worker `activation_pool`), so a slow endpoint on one connection no longer stalls the other tenants' due slots. The shared pool also bounds the total number of concurrent CLI subprocesses regardless of tenant count.
