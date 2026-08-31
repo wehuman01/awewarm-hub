@@ -27,11 +27,32 @@ from awewarm import server as solo_server  # the single-tenant engine this packa
 from awewarm.server import ApiError
 from awewarm_hub import engine
 from awewarm_hub.cli import cli as hub_cli
+from awewarm_hub.landing import landing_html, pick_language, wants_html
 from awewarm.cli import cli as client_cli  # what hub users run
 
 TZ = "Asia/Shanghai"
 HUB_RUNNER = CliRunner()
 CLIENT_RUNNER = CliRunner()
+
+
+class LandingTests(unittest.TestCase):
+    def test_browser_detection_and_language(self):
+        self.assertTrue(wants_html("text/html,application/xhtml+xml"))
+        self.assertFalse(wants_html("application/json"))
+        self.assertEqual(pick_language("", "zh-CN,zh;q=0.9"), "zh")
+        self.assertEqual(pick_language("lang=en", "zh-CN"), "en")
+
+    def test_landing_is_warm_themed_and_escapes_host(self):
+        html = landing_html("en", 'warm.example/\"<x>', "0.6.5")
+        self.assertIn("Keep the window warm", html)
+        self.assertIn("--ember:#ffb454", html)
+        self.assertIn("warm.example/&quot;&lt;x&gt;", html)
+        self.assertNotIn("aweshare", html)
+
+    def test_landing_has_chinese_copy(self):
+        html = landing_html("zh", "awewarm.wehuman.top", "0.6.5")
+        self.assertIn("让订阅窗口一直保持温热", html)
+        self.assertIn("社区 Hub", html)
 
 
 def invoke(*args, **kwargs):
@@ -88,6 +109,20 @@ class HubCase(unittest.TestCase):
 
 
 class PairingTests(HubCase):
+    def test_browser_root_is_landing_but_api_root_stays_json_404(self):
+        browser = urllib.request.Request(
+            self.url + "/?lang=zh",
+            headers={"Accept": "text/html", "Accept-Language": "en-US"},
+        )
+        with urllib.request.urlopen(browser) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("让订阅窗口一直保持温热", response.read().decode())
+
+        api = urllib.request.Request(self.url + "/", headers={"Accept": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(api)
+        self.assertEqual(raised.exception.code, 401)
+
     def test_healthz_advertises_hub_mode(self):
         health = remote_client.healthz(self.url)
         self.assertTrue(health["ok"])

@@ -7,6 +7,9 @@ rides on manual runs. Everything else (routing, plumbing, the wire
 protocol) is inherited from awewarm.server.
 """
 from awewarm.server import ApiError, _Handler
+from urllib.parse import urlparse
+
+from .landing import landing_html, pick_language, wants_html
 
 from . import __version__
 
@@ -46,3 +49,20 @@ class HubHandler(_Handler):
 
     def _run_now(self, warm, tenant, conn_id, body):
         return self.hub.run_now(tenant, conn_id, bool(body.get("resetDue")), bool(body.get("allowAutoDisabled")))
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/" and wants_html(self.headers.get("Accept")):
+            html = landing_html(
+                pick_language(parsed.query, self.headers.get("Accept-Language")),
+                self.headers.get("Host") or "localhost",
+                __version__,
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(html)
+            return
+        super().do_GET()
