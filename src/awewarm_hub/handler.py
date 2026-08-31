@@ -6,12 +6,12 @@ private workspace, quotas gate PUT, release never frees a slot, and usage
 rides on manual runs. Everything else (routing, plumbing, the wire
 protocol) is inherited from awewarm.server.
 """
-from awewarm.server import ApiError, _Handler
 from urllib.parse import urlparse
 
-from .landing import landing_html, pick_language, wants_html
+from awewarm.server import ApiError, _Handler
 
 from . import __version__
+from .landing import landing_html, pick_language, wants_html
 
 
 class HubHandler(_Handler):

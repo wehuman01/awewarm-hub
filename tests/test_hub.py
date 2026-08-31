@@ -44,14 +44,14 @@ class LandingTests(unittest.TestCase):
 
     def test_landing_is_warm_themed_and_escapes_host(self):
         html = landing_html("en", 'warm.example/\"<x>', "0.6.5")
-        self.assertIn("Keep the window warm", html)
+        self.assertIn("Keep the window warm<em>.</em>", html)
         self.assertIn("--ember:#ffb454", html)
         self.assertIn("warm.example/&quot;&lt;x&gt;", html)
         self.assertNotIn("aweshare", html)
 
     def test_landing_has_chinese_copy(self):
         html = landing_html("zh", "awewarm.wehuman.top", "0.6.5")
-        self.assertIn("让订阅窗口一直保持温热", html)
+        self.assertIn("让订阅窗口一直保持温热<em>。</em>", html)
         self.assertIn("社区 Hub", html)
 
 
@@ -109,7 +109,7 @@ class HubCase(unittest.TestCase):
 
 
 class PairingTests(HubCase):
-    def test_browser_root_is_landing_but_api_root_stays_json_404(self):
+    def test_browser_root_is_landing_but_api_root_stays_json_401(self):
         browser = urllib.request.Request(
             self.url + "/?lang=zh",
             headers={"Accept": "text/html", "Accept-Language": "en-US"},

@@ -1,7 +1,9 @@
 """The browser-only front door for the community awewarm hub."""
 
 from html import escape
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs
+
+CONTACT_EMAIL = "peng@wehuman.top"
 
 
 def wants_html(accept):
@@ -58,12 +60,13 @@ footer { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; 
 """
 
 
-def landing_html(lang, host, version, contact_email="peng@wehuman.top"):
+def landing_html(lang, host, version):
     host = escape(host or "localhost", quote=True)
-    email = escape(contact_email.strip(), quote=True)
+    email = escape(CONTACT_EMAIL, quote=True)
     zh = lang == "zh"
     if zh:
         title = "让订阅窗口一直保持温热。"
+        headline = "让订阅窗口一直保持温热<em>。</em>"
         lead = "awewarm 是一个轻量的后台调度器：在正确的时间发送一条最小请求，让 Claude Code、Codex 和兼容套餐的用量窗口持续开启。"
         docs = "阅读文档"; github = "查看 GitHub"; why = "为什么需要它"; why_tag = "A SMALL REQUEST, RIGHT ON TIME"
         cards = [("01", "机器可以睡觉", "fixed 模式配合补跑窗口，合盖、短暂断网也不必手动盯着。"), ("02", "窗口滚动续期", "已确认窗口时长后，用 interval 模式按窗口 + 缓冲自动续期。"), ("03", "把保温交给 Hub", "没有常开机器？通过邀请制社区 Hub，让常驻服务器替你发送请求。")]
@@ -73,6 +76,7 @@ def landing_html(lang, host, version, contact_email="peng@wehuman.top"):
         community = "社区 Hub 指南"; lang_toggle = '<a href="/?lang=en">EN</a><span class="sep">/</span><span class="on">中文</span>'
     else:
         title = "Keep the window warm."
+        headline = "Keep the window warm<em>.</em>"
         lead = "awewarm is a small background scheduler that sends one minimal request at the right moment, keeping Claude Code, Codex, and compatible coding-plan windows open."
         docs = "Read the docs"; github = "View on GitHub"; why = "Why awewarm"; why_tag = "A SMALL REQUEST, RIGHT ON TIME"
         cards = [("01", "Your machine can sleep", "fixed mode and catch-up windows handle lids, brief outages, and missed slots."), ("02", "Renew on a rolling clock", "Once a window is confirmed, interval mode renews it after window + a small buffer."), ("03", "Delegate to a Hub", "No always-on machine? An invite-only community Hub can fire the requests for you.")]
@@ -81,4 +85,4 @@ def landing_html(lang, host, version, contact_email="peng@wehuman.top"):
         trust = "<strong>Trust boundary:</strong> an API key delegated to this Hub passes through the operator's machine memory; it is RAM-only by default."
         community = "Community Hub guide"; lang_toggle = '<span class="on">EN</span><span class="sep">/</span><a href="/?lang=zh">中文</a>'
     tiles = "".join(f'<article class="tile"><span class="num">{n}</span><h3>{h}</h3><p>{p}</p></article>' for n, h, p in cards)
-    return f'''<!doctype html><html lang="{"zh-CN" if zh else "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>awewarm · {title}</title><style>{CSS}</style></head><body><main class="shell"><header><a class="brand" href="/"><span class="mark"></span><span class="brand-name">awewarm</span><span class="brand-tag">hub</span></a><nav class="language">{lang_toggle}</nav></header><section class="hero"><div><div class="eyebrow">{why_tag}</div><h1>{title.split(".")[0]}<em>.</em></h1><p class="lede">{lead}</p><div class="hero-links"><a class="button" href="https://github.com/wehuman01/awewarm">{github}</a><a class="button alt" href="https://github.com/wehuman01/awewarm/blob/main/docs/community-hub/README{"_cn" if zh else ""}.md">{docs}</a></div></div><div class="orbit-card"><div class="orbit"><span class="sun"></span><span class="spark one"></span><span class="spark two"></span></div><span class="orbit-label">WINDOW / WARM / READY</span></div></section><section><div class="section-head"><h2>{why}</h2><span>01 — 03</span></div><div class="grid">{tiles}</div></section><section class="connect"><div><h2>{connect_title}</h2><p>{connect_copy}</p><p class="trust">{trust}</p></div><pre>{command}</pre></section><footer><span>awewarm-hub v{escape(version)}</span><span><a href="https://github.com/wehuman01/awewarm-hub">GitHub</a> · <a href="https://github.com/wehuman01/awewarm/blob/main/docs/community-hub/README{"_cn" if zh else ""}.md">{community}</a> · <code>GET /healthz</code></span></footer></main></body></html>'''
+    return f'''<!doctype html><html lang="{"zh-CN" if zh else "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>awewarm · {title}</title><style>{CSS}</style></head><body><main class="shell"><header><a class="brand" href="/"><span class="mark"></span><span class="brand-name">awewarm</span><span class="brand-tag">hub</span></a><nav class="language">{lang_toggle}</nav></header><section class="hero"><div><div class="eyebrow">{why_tag}</div><h1>{headline}</h1><p class="lede">{lead}</p><div class="hero-links"><a class="button" href="https://github.com/wehuman01/awewarm">{github}</a><a class="button alt" href="https://github.com/wehuman01/awewarm/blob/main/docs/community-hub/README{"_cn" if zh else ""}.md">{docs}</a></div></div><div class="orbit-card"><div class="orbit"><span class="sun"></span><span class="spark one"></span><span class="spark two"></span></div><span class="orbit-label">WINDOW / WARM / READY</span></div></section><section><div class="section-head"><h2>{why}</h2><span>01 — 03</span></div><div class="grid">{tiles}</div></section><section class="connect"><div><h2>{connect_title}</h2><p>{connect_copy}</p><p class="trust">{trust}</p></div><pre>{command}</pre></section><footer><span>awewarm-hub v{escape(version)}</span><span><a href="https://github.com/wehuman01/awewarm-hub">GitHub</a> · <a href="https://github.com/wehuman01/awewarm/blob/main/docs/community-hub/README{"_cn" if zh else ""}.md">{community}</a> · <code>GET /healthz</code></span></footer></main></body></html>'''
