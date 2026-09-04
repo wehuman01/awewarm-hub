@@ -31,19 +31,11 @@ awewarm-hub 把角色一分为二：
 - **运维者**（这台机器，7×24 常驻盒子）：运行 `awewarm-hub serve` 和下述管理命令，签发一次性邀请码并分发给成员。
 - **用户**（各自的机器，只需开源的 [awewarm](https://github.com/wehuman01/awewarm)）：`awewarm remote connect <url> --invite awi_...`，然后 `awewarm config set <id> --remote`。他们完全不需要本包。
 
-## 安装
-
-需要 Python ≥ 3.9:
-
-```bash
-pip install awewarm-hub          # 会一并装上 awewarm
-```
-
 ## 快速开始
 
-### 让 AI agent 代装
+### 1. 安装和使用 awewarm-hub
 
-在 Claude Code、Codex 或其他编程 agent 里,对它说:
+在 Claude Code、Codex 或其他编程 agent 里，对它说:
 
 ```text
 阅读 https://github.com/wehuman01/awewarm-hub/blob/main/README.ai.md 并按其指引搭建 awewarm-hub 服务器。
@@ -51,13 +43,99 @@ pip install awewarm-hub          # 会一并装上 awewarm
 
 Agent 会安装 CLI、只读检查状态与租户,并按你的要求签发邀请码。常驻的 `serve` 进程本身留在你的终端(或 systemd)里 —— agent 绝不把它后台化。
 
-### 手动搭建
+<details>
+<summary>手动安装</summary>
+
+需要 Python ≥ 3.9:
+
+```bash
+pip install awewarm-hub          # 会一并装上 awewarm
+awewarm-hub -v
+```
+
+</details>
+
+### 2. 在自己的终端启动服务器
+
+`awewarm-hub serve` 是常驻进程 —— 这是唯一一件 agent 不会替你做的事。它属于你的终端、tmux 或 systemd 单元(单元与 cloudflared 隧道配置见下方 [awewarm 与 awewarm-hub](#awewarm-与-awewarm-hub)):
 
 ```bash
 awewarm-hub serve                # 监听 127.0.0.1:8790,数据在 ~/.awewarm-server
 awewarm-hub invite --name alice  # 打印 awi_...(一次性,7 天有效)
 awewarm-hub status               # 容量、邀请码、租户、serve 存活状态
 ```
+
+### 3. 开始用自然语言管理 hub
+
+服务器跑起来之后，日常运维都交给 agent(完整命令参考见[命令](#命令))：
+
+#### 邀请一位用户
+
+可以直接对 agent 说：
+
+```text
+邀请 bob 加入 hub。
+```
+
+Agent 会签发一个一次性邀请码(`awi_...`，只打印一次)—— 及时、私下地交给对方。对方在自己机器上用开源版 awewarm(完全不需要本包)配对并委派：
+
+```bash
+awewarm remote connect https://warm.example.com --invite awi_...
+awewarm config set <id> --remote
+```
+
+<details>
+<summary>等价的 CLI 命令</summary>
+
+```bash
+awewarm-hub invite --name bob                                # 每人一码
+awewarm-hub invite --name team --count 5 --expires-in 7d     # 团队批量(共享名称、有效期和机器上限)
+awewarm-hub status                                           # 租户数与容量上限
+```
+
+</details>
+
+#### 查看谁加入了、用量如何
+
+可以直接对 agent 说：
+
+```text
+现在有哪些人加入了？用量怎么样？
+```
+
+<details>
+<summary>等价的 CLI 命令</summary>
+
+```bash
+awewarm-hub status                 # 容量、邀请码数量、serve 存活状态
+awewarm-hub list users             # 租户:健康度、用量、机器、加入时用的邀请码
+awewarm-hub list invites           # 所有已签发邀请码及其状态
+```
+
+</details>
+
+#### 停用与恢复租户
+
+可以直接对 agent 说：
+
+```text
+alice 休假期间先停用她的租户，回来后再恢复。
+```
+
+吊销是停用而非删除 —— `restore` 可完整撤销，机器配对不受影响。破坏性的 `--delete` 变体只在你明确要求彻底删除时才会运行。
+
+<details>
+<summary>等价的 CLI 命令</summary>
+
+```bash
+awewarm-hub invite revoke <id|code>     # 待用的立即失效，已用的停用其租户(可逆)
+awewarm-hub invite restore <id|code>    # 撤销一次 revoke
+awewarm-hub list invites                # 找 id —— ID 列，天然唯一
+```
+
+</details>
+
+> **进阶内容：** 双包角色划分、完整命令参考、租户工作区机制和安全模型见下方章节 —— 从 [awewarm 与 awewarm-hub](#awewarm-与-awewarm-hub) 开始。
 
 ## awewarm 与 awewarm-hub
 

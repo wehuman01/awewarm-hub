@@ -31,17 +31,9 @@ awewarm-hub splits the roles in two:
 - **Operator** (this machine, the 24/7 box): `awewarm-hub serve` + the admin commands below. You mint one-time invite codes and hand them out.
 - **Users** (their own machines, plain open-source [awewarm](https://github.com/wehuman01/awewarm) only): `awewarm remote connect <url> --invite awi_...`, then `awewarm config set <id> --remote`. They never need this package.
 
-## Install
-
-Requires Python ≥ 3.9:
-
-```bash
-pip install awewarm-hub          # brings awewarm with it
-```
-
 ## Quick Start
 
-### Let an AI agent set it up
+### 1. Install and use awewarm-hub
 
 Working in Claude Code, Codex, or another coding agent? Tell it:
 
@@ -51,13 +43,99 @@ Read https://github.com/wehuman01/awewarm-hub/blob/main/README.ai.md and follow 
 
 The agent installs the CLI, checks status and tenants read-only, and mints invite codes on your request. The resident `serve` process itself stays in your terminal (or systemd) — an agent never backgrounds it.
 
-### Manual setup
+<details>
+<summary>Manual install</summary>
+
+Requires Python ≥ 3.9:
+
+```bash
+pip install awewarm-hub          # brings the awewarm engine with it
+awewarm-hub -v
+```
+
+</details>
+
+### 2. Start the server in your terminal
+
+`awewarm-hub serve` is a resident process — the one thing the agent will not run for you. It belongs in your terminal, tmux, or a systemd unit (the unit and the cloudflared tunnel setup are in [awewarm and awewarm-hub](#awewarm-and-awewarm-hub) below):
 
 ```bash
 awewarm-hub serve                # listens on 127.0.0.1:8790, data at ~/.awewarm-server
 awewarm-hub invite --name alice  # prints awi_... (one use, 7 d)
 awewarm-hub status               # capacity, invite counts, tenants, serve liveness
 ```
+
+### 3. Manage the hub through natural language
+
+Once the server is up, day-to-day operation goes through your agent (the full command reference is in [Commands](#commands)):
+
+#### Invite a user
+
+You can tell your agent:
+
+```text
+Invite bob to the hub.
+```
+
+The agent mints a one-time code (`awi_...`, printed once) — hand it to that person promptly and privately. On their own machine, with plain open-source awewarm (they never need this package), they pair and delegate:
+
+```bash
+awewarm remote connect https://warm.example.com --invite awi_...
+awewarm config set <id> --remote
+```
+
+<details>
+<summary>Equivalent CLI commands</summary>
+
+```bash
+awewarm-hub invite --name bob                                # one invite per person
+awewarm-hub invite --name team --count 5 --expires-in 7d     # batch for a team (codes share name, expiry, machine cap)
+awewarm-hub status                                           # tenants against the max
+```
+
+</details>
+
+#### Check who joined and how much they use
+
+You can tell your agent:
+
+```text
+Who has joined, and how much are they using?
+```
+
+<details>
+<summary>Equivalent CLI commands</summary>
+
+```bash
+awewarm-hub status                 # capacity, invite counts, serve liveness
+awewarm-hub list users             # tenants: health, usage, machines, joining code
+awewarm-hub list invites           # every minted code and its fate
+```
+
+</details>
+
+#### Suspend and restore a tenant
+
+You can tell your agent:
+
+```text
+Suspend alice's tenant while she's on vacation, and restore it when she's back.
+```
+
+Revocation is suspension, not deletion — `restore` undoes it, and machine pairings are untouched. The destructive `--delete` variant runs only when you explicitly ask to delete outright.
+
+<details>
+<summary>Equivalent CLI commands</summary>
+
+```bash
+awewarm-hub invite revoke <id|code>     # pending stops pairing, used suspends its tenant (reversible)
+awewarm-hub invite restore <id|code>    # undo
+awewarm-hub list invites                # find the id — the ID column, unique by construction
+```
+
+</details>
+
+> **Beyond the basics:** the two-package role split, the full command reference, tenant workspaces, and the security model are covered below — start with [awewarm and awewarm-hub](#awewarm-and-awewarm-hub).
 
 ## awewarm and awewarm-hub
 
