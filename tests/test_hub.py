@@ -43,14 +43,19 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(pick_language("lang=en", "zh-CN"), "en")
 
     def test_landing_is_warm_themed_and_escapes_host(self):
-        html = landing_html("en", 'warm.example/\"<x>', "0.6.5")
+        html = landing_html("en", 'warm.example/\"<x>')
         self.assertIn("Keep the window warm<em>.</em>", html)
         self.assertIn("--ember:#ffb454", html)
         self.assertIn("warm.example/&quot;&lt;x&gt;", html)
         self.assertNotIn("aweshare", html)
 
+    def test_landing_footer_has_no_version(self):
+        html = landing_html("en", "warm.example")
+        self.assertIn("powered by awewarm-hub", html)
+        self.assertNotIn(awewarm_hub.__version__, html)
+
     def test_landing_has_chinese_copy(self):
-        html = landing_html("zh", "awewarm.wehuman.top", "0.6.5")
+        html = landing_html("zh", "awewarm.wehuman.top")
         self.assertIn("让订阅窗口一直保持温热<em>。</em>", html)
         self.assertIn("社区 Hub", html)
 

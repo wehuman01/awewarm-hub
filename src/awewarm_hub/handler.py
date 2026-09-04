@@ -56,7 +56,6 @@ class HubHandler(_Handler):
             html = landing_html(
                 pick_language(parsed.query, self.headers.get("Accept-Language")),
                 self.headers.get("Host") or "localhost",
-                __version__,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
