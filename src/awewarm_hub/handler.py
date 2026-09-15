@@ -50,6 +50,11 @@ class HubHandler(_Handler):
     def _run_now(self, warm, tenant, conn_id, body):
         return self.hub.run_now(tenant, conn_id, bool(body.get("resetDue")), bool(body.get("allowAutoDisabled")))
 
+    def _set_override(self, warm, tenant, conn_id, body):
+        return self.hub.set_next_override(
+            tenant, conn_id, body.get("nextOverrideAt"), body.get("nextOverrideSlot")
+        )
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/" and wants_html(self.headers.get("Accept")):

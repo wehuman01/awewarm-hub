@@ -889,6 +889,13 @@ class Hub:
             self._bump_usage(tenant, 1)
         return result
 
+    def set_next_override(self, tenant, conn_id, at, slot=None):
+        """Re-authorize, then pin/clear the one-shot next fire on this tenant."""
+        with self._registry_transaction():
+            if tenant.id not in self.tenants or self._suspension_of(tenant.id):
+                raise ApiError(401, "hub token was revoked during this request")
+            return tenant.warm.set_next_override(conn_id, at, slot)
+
 
 def _hash_secret(value):
     return hashlib.sha256((value or "").encode()).hexdigest()
