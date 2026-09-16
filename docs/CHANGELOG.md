@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.1
+
+**Delegated clients can now pin or move the next fire without resetting schedule memory.** A new `POST /v1/connections/<id>/override` route carries a tenant's `set_next_override` through the hub seams — the delegated connection re-authorizes first (matching `put_connection`/`run_now`), then sets or clears the one-shot `nextOverrideAt`/`nextOverrideSlot` on the connection. Previously the only way to reschedule was re-pushing the connection, which wiped the schedule cursor; the override moves just the next tick.
+
+Housekeeping: the landing page footer no longer embeds the running version (a sticky string that always lagged the shipped package), and CI runs through the shared `./verify` gate.
+
 ## v0.7.0
 
 **The hub has a browser front door.** `GET /` from a browser (an HTML `Accept` header) now serves a landing page — bilingual, `?lang=en|zh` or the browser's own `Accept-Language` — explaining what awewarm is, why the window needs keeping warm, and the copy-paste `awewarm remote connect https://<host> --invite awi_…` line with the trust boundary spelled out. The `<host>` in that command is the address the visitor reached the hub by (taken from the request's own Host header, HTML-escaped), so it is always the URL that actually worked.
