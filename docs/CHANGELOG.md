@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.2
+
+**`self-update` no longer leaves the engine behind — the pin it ships is the engine it installs.** The hub and its engine version in lockstep (the dependency pin is the contract the wire protocol preserves), but upgrading the hub package alone only moved `awewarm-hub`, leaving the pinned `awewarm` engine on the old minor and the two sides speaking an earlier protocol. The hub's own chore is now its own problem no more:
+
+- **`awewarm-hub self-update` upgrades the package and brings the pinned engine to the latest its own requirement allows.** It reads the pin from the *installed* metadata — the same range pip is bound to, which is exactly the range that stays in lockstep with the released client and which the source checkout's `pyproject.toml` already pins — so it can never pull an engine past what the hub's wire protocol understands. Running on pip's own `awewarm-hub` (an editable/source checkout already refuses with a pointer), it re-installs the hub → `awewarm-hub X` and then `engine awewarm Y -> Z`, printing the exact version ladder.
+- **The alignment is visible before it is applied.** `awewarm-hub self-update --check` prints current engine and the latest the pin allows, and what an upgrade is currently blocked on; a pip failure on the engine step only warns — the hub itself still upgrades, and the operator is told the engine stayed behind rather than pretending it succeeded.
+- **A serve running underneath says so.** When the upgrade lands, the engine swap needs the running process restarted — the output prints the `systemctl --user restart awewarm-hub` (or raw `serve` restart) line instead of just "Done", keeping the server honest about which binaries are actually live.
+- **The engine pin moves to the next minor in this release, together with the engine's own v0.7.2.** `awewarm>=0.6,<0.7` → `awewarm>=0.7,<0.8`, bumped in the same change as the engine release — a wire-compatible 0.7 line; `self-update` on this hub will now resolve engines at latest 0.7.x, safely above its clients' just-shipped 0.7.2.
+
 ## v0.7.1
 
 **Delegated clients can now pin or move the next fire without resetting schedule memory.** A new `POST /v1/connections/<id>/override` route carries a tenant's `set_next_override` through the hub seams — the delegated connection re-authorizes first (matching `put_connection`/`run_now`), then sets or clears the one-shot `nextOverrideAt`/`nextOverrideSlot` on the connection. Previously the only way to reschedule was re-pushing the connection, which wiped the schedule cursor; the override moves just the next tick.
