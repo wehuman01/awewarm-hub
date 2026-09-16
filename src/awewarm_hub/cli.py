@@ -4,6 +4,7 @@ self-update. Run on the machine that hosts the hub; hub *users* never need
 this package — they pair with the open-source awewarm client:
 
   awewarm remote connect <url> --invite awi_..."""
+import importlib.metadata
 import json
 import re
 import shutil
@@ -749,18 +750,42 @@ def legacy_restore_command(code, data_dir):
 @cli.command("self-update")
 @click.option("--check", "check_only", is_flag=True, help="Show versions without updating.")
 def self_update_command(check_only):
-    """Update awewarm-hub to the latest PyPI release."""
+    """Update awewarm-hub and its awewarm engine to the latest PyPI releases.
+
+    The hub and the engine release in lockstep, but plain `pip install
+    --upgrade awewarm-hub` re-resolves only the hub's own requirements: an
+    installed awewarm engine already inside the `>=0.6,<0.7` pin is left
+    behind, and new hub endpoints silently 404 against it. So this command
+    syncs the engine too, in the same environment, so the Hub surfacing new
+    endpoints is never enough to break the pairing."""
     try:
-        latest = get_pypi_latest("awewarm-hub")
+        hub_latest = get_pypi_latest("awewarm-hub")
     except Exception as exc:
         die(f"failed to check PyPI: {exc}")
-    if version_gte(__version__, latest):
+
+    if version_gte(__version__, hub_latest):
         click.echo(f"awewarm-hub is up to date ({__version__}).")
-        return
-    click.echo(f"Current: {__version__}  Latest: {latest}")
+        hub_was_installed = False
+    else:
+        click.echo(f"Current: {__version__}  Latest: {hub_latest}")
+        hub_was_installed = _install_hub(check_only)
+
+    engine_upgraded = _sync_engine(check_only)
+
+    if not check_only and (hub_was_installed or engine_upgraded):
+        _restart_hint()
+
+
+def _install_hub(check_only):
+    """Upgrade awewarm-hub itself; True when a real install ran this time.
+
+    Everything here mirrors the pre-existing self-update behavior, split out
+    only so the engine sync below can run for *both* the "hub was already
+    current" and the "hub was just upgraded" cases — the drift the lockstep
+    report flags is exactly the engine being left on an old pin."""
     if check_only:
-        return
-    from . import running_from_checkout
+        return False
+    from . import running_from_checkout  # a pip -e . checkout updates by git
     if running_from_checkout():
         die("this awewarm-hub runs from a source checkout (pip install -e .) — "
             "update it with: git pull && pip install -e .")
@@ -775,6 +800,114 @@ def self_update_command(check_only):
     if result.returncode != 0:
         raise SystemExit(result.returncode)
     click.echo("Done. Restart `awewarm-hub serve` to run the new version.")
+    return True
+
+
+def _installed_version(dist):
+    """The version of an installed distribution in this environment, or None."""
+    try:
+        return importlib.metadata.version(dist)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _engine_pip_spec():
+    """The awewarm requirement awewarm-hub declares, for pip to stay in range.
+
+    Read from the installed metadata (the same pin pyproject pins) rather than
+    a second copy here: the engine range is the contract the hub builds on,
+    and dropping it would let `pip install --upgrade awewarm` drift past what
+    the hub was tested against."""
+    try:
+        for line in importlib.metadata.requires("awewarm-hub") or ():
+            base, _sep, marker = line.partition(";")
+            base = base.strip()
+            if marker.strip() and "extra" in marker:
+                continue
+            match = re.match(r"[A-Za-z0-9._-]+", base)
+            if match and match.group(0).lower().replace("_", "-") == "awewarm":
+                return re.sub(r"\[[^\]]*\]", "", base).strip()
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    return "awewarm"
+
+
+def _sync_engine(check_only):
+    """Bring the installed awewarm engine to the latest the pin allows.
+
+    Returns True when the engine was actually upgraded in this run, so the
+    caller knows a restart is in order. The pip call uses the same style as
+    the hub self-update and is pinned by the requirement pip resolves, so it
+    can only ever land on the latest version awewarm-hub permits."""
+    installed = _installed_version("awewarm")
+    if installed is None:
+        click.echo("engine awewarm: not installed")
+        return False
+    try:
+        latest = get_pypi_latest("awewarm")
+    except Exception as exc:
+        # A PyPI hiccup is not a fatal failure of the hub update itself — this
+        # is a best-effort lockstep, so spell out where it stands and move on.
+        click.echo(f"engine awewarm {installed} (latest check failed: {exc})", err=True)
+        return False
+    if version_gte(installed, latest):
+        click.echo(f"engine awewarm {installed} (up to date)")
+        return False
+    if check_only:
+        click.echo(f"engine awewarm {installed} -> {latest} (not applied)")
+        return False
+    spec = _engine_pip_spec()
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", spec]
+    click.echo(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        # pip failing (offline, permissions) must not undo the hub update that
+        # already happened — warn and show the exact command to retry by hand.
+        click.echo(
+            f"warning: could not upgrade the engine (still {installed}) — new hub "
+            f"endpoints may 404; run: {' '.join(cmd)}",
+            err=True,
+        )
+        return False
+    after = _installed_version("awewarm")
+    if after and after != installed:
+        click.echo(f"engine awewarm {installed} -> {after}")
+        return True
+    click.echo(f"engine awewarm {after or installed} (up to date)")
+    return False
+
+
+def _systemd_restart_cmd():
+    """The systemctl restart for a served unit, if a systemd user unit exists."""
+    unit = Path("~/.config/systemd/user/awewarm-hub.service").expanduser()
+    if shutil.which("systemctl") and unit.is_file():
+        return ["systemctl", "--user", "restart", "awewarm-hub"]
+    return None
+
+
+def _serve_running():
+    """True when a live serve answers /healthz for this box's data dir."""
+    try:
+        record = Hub(_resolve_server_data_dir(None)).serve_record
+    except Exception:
+        return False
+    _url, probe = _probe_serve(record)
+    return bool(probe)
+
+
+def _restart_hint():
+    """Point at a restart once serve is running, the engine then takes effect.
+
+    Only meaningful right after an upgrade: a running serve keeps the old
+    process in memory, so print the one-liner that restarts it."""
+    if not _serve_running():
+        return
+    sysd = _systemd_restart_cmd()
+    cmd = " ".join(sysd) if sysd else "restart `awewarm-hub serve`"
+    click.echo(
+        "  note: `awewarm-hub serve` is running the old binaries — restart it for "
+        f"the new hub/engine to take effect: {cmd}"
+    )
 
 
 # --- shared output helpers ---

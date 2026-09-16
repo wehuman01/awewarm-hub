@@ -7,6 +7,7 @@ via hashed tokens while API keys stay RAM-only), revocation, and the client
 """
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -1769,7 +1770,108 @@ class ConnectHubTests(IsolatedTestCase):
         remote_client.store_token(joined["token"])
         self.hub.revoke(code)
         fresh = self.hub.mint_invite("alice")
+        fresh = self.hub.mint_invite("alice")
         result = invoke_client(["remote", "connect", self.url, "--invite", fresh])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("rejected", result.output)  # the old token's 401 was reported
         self.assertIn("Joined", result.output)
+
+
+class SelfUpdateEngineTests(IsolatedTestCase):
+    """self-update keeps the installed awewarm engine in lockstep with the hub.
+
+    The bug that motived these: `pip install --upgrade awewarm-hub` re-resolves
+    only the hub's own requirements, so an engine already inside the loose
+    `>=0.6,<0.7` pin is left behind — and new hub endpoints 404 against it.
+    self-update must therefore report (and, when not --check, actually do) the
+    engine upgrade too."
+
+    Each test stubs the two network/install seams — get_pypi_latest and
+    subprocess.run — plus the engine's metadata version, so no real PyPI or pip
+    call happens.
+    """
+
+    def setUp(self):
+        # self-update is not data-dir scoped; point it at a throwaway dir like
+        # every other hub command so a running-serve probe never touches real state.
+        super().setUp()
+
+    @staticmethod
+    def _latest(package):
+        versions = {"awewarm-hub": "0.7.1", "awewarm": "0.6.9"}
+        return versions[package]
+
+    @mock.patch("awewarm_hub.cli._installed_version", return_value="0.6.9")
+    @mock.patch("awewarm_hub.cli.subprocess.run")
+    def test_engine_up_to_date_does_not_install(self, run, _version):
+        run.return_value = mock.Mock(returncode=0)
+        with mock.patch("awewarm_hub.cli.get_pypi_latest", side_effect=self._latest):
+            result = invoke(["self-update"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("engine awewarm 0.6.9 (up to date)", result.output)
+        run.assert_not_called()  # nothing to pip-install
+
+    @mock.patch("awewarm_hub.cli._serve_running", return_value=False)
+    def test_engine_upgrade_installs_and_reports(self, _serve):
+        state = {"version": "0.6.5"}
+
+        def fake_installed(dist):
+            return state["version"]
+
+        with mock.patch("awewarm_hub.cli._installed_version", side_effect=fake_installed):
+            with mock.patch("awewarm_hub.cli.subprocess.run") as run:
+                # pip "installs" the new engine: bump the metadata version so the
+                # post-install read sees the transition just like a real pip would.
+                def fake_run(cmd):
+                    state["version"] = "0.6.9"
+                    return mock.Mock(returncode=0)
+
+                run.side_effect = fake_run
+                with mock.patch("awewarm_hub.cli.get_pypi_latest", side_effect=self._latest):
+                    result = invoke(["self-update"])
+        self.assertEqual(result.exit_code, 0)
+        # the engine spec comes from awewarm-hub's own pin, not a bare name.
+        spec = awewarm_hub.cli._engine_pip_spec()
+        run.assert_called_once_with([sys.executable, "-m", "pip", "install", "--upgrade", spec])
+        self.assertIn("engine awewarm 0.6.5 -> 0.6.9", result.output)
+
+    @mock.patch("awewarm_hub.cli._installed_version", return_value="0.6.5")
+    @mock.patch("awewarm_hub.cli.subprocess.run")
+    def test_engine_pip_failure_warns_without_interrupting(self, mock_run, _version):
+        mock_run.return_value = mock.Mock(returncode=1)
+        with mock.patch("awewarm_hub.cli.get_pypi_latest", side_effect=self._latest):
+            result = invoke(["self-update"])
+        # hub is already current; the failed engine install is a warning, not fatal.
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("warning: could not upgrade the engine", result.output)
+
+    @mock.patch("awewarm_hub.cli._installed_version", return_value="0.6.5")
+    @mock.patch("awewarm_hub.cli.subprocess.run")
+    def test_check_mode_is_read_only(self, mock_run, _version):
+        with mock.patch("awewarm_hub.cli.get_pypi_latest", side_effect=self._latest):
+            result = invoke(["self-update", "--check"])
+        self.assertEqual(result.exit_code, 0)
+        mock_run.assert_not_called()  # --check must never pip-install the engine
+        self.assertIn("engine awewarm 0.6.5 -> 0.6.9 (not applied)", result.output)
+
+    @mock.patch("awewarm_hub.cli._installed_version", return_value="0.6.5")
+    @mock.patch("awewarm_hub.cli._serve_running", return_value=True)
+    @mock.patch("awewarm_hub.cli._systemd_restart_cmd", return_value=None)
+    def test_engine_upgrade_while_serving_prompts_restart(self, _sysd, _serve, _version):
+        state = {"version": "0.6.5"}
+
+        def fake_installed(dist):
+            return state["version"]
+
+        with mock.patch("awewarm_hub.cli._installed_version", side_effect=fake_installed):
+            with mock.patch("awewarm_hub.cli.subprocess.run") as run:
+                def fake_run(cmd):
+                    state["version"] = "0.6.9"
+                    return mock.Mock(returncode=0)
+
+                run.side_effect = fake_run
+                with mock.patch("awewarm_hub.cli.get_pypi_latest", side_effect=self._latest):
+                    result = invoke(["self-update"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("running the old binaries", result.output)
+        self.assertIn("restart `awewarm-hub serve`", result.output)
